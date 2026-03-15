@@ -24,7 +24,7 @@ jobs:
 
       - name: Run Experiment 400 (all instances, 16 scenarios each)
         run: |
-          python python_src/main.py datasets/h400_new 16
+          python python_src/main.py datasets/h400_new
         env:
           LOG_MAIN: result.log
           LOG_HEU: result.log
