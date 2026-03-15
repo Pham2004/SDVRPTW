@@ -25,6 +25,12 @@ jobs:
       - name: Run Experiment 100 (all instances, 16 scenarios each)
         run: |
           python python_src/main.py datasets/h100_new 16
+        env:
+          LOG_MAIN: result.log
+          LOG_HEU: result.log
+          LOG_GP: result.log
+          LOG_LASTPOP: result.log
+          LOG_LASTROUTE: result.log
 
       - name: Aggregate Results
         run: |
