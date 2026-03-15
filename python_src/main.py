@@ -87,7 +87,7 @@ ROUTEEVAL = log_mod.Logger("ROUTEEVAL")
 DEBUG   = log_mod.Logger("DEBUG")
 
 # ── Configs (match Rust defaults) ──────────────────────────────────────────────
-CONST_RATE      = float(os.environ.get("CONST_RATE",      "0.1"))
+CONST_RATE      = float(os.environ.get("CONST_RATE",      "0.0"))
 WEIGHT          = float(os.environ.get("WEIGHT",          "0.5"))
 LATE_WEIGHT     = float(os.environ.get("LATE_WEIGHT",     "1"))
 PENDING_WEIGHT  = float(os.environ.get("PENDING_WEIGHT",  "2"))
@@ -98,8 +98,9 @@ POP_SIZE        = int(os.environ.get("POP_SIZE",          "100"))
 MAX_DEPTH       = int(os.environ.get("MAX_DEPTH",         "6"))
 CROSSOVER_RATE  = float(os.environ.get("CROSSOVER_RATE",  "0.8"))
 MUTATION_RATE   = float(os.environ.get("MUTATION_RATE",   "0.15"))
-TRAIN_FACTOR    = float(os.environ.get("TRAIN_FACTOR",    "0.1"))
+TRAIN_FACTOR    = float(os.environ.get("TRAIN_FACTOR",    "2.0"))
 STRESS_FACTOR   = float(os.environ.get("STRESS_FACTOR",   "1.0"))
+SCENARIO_TRAIN_RATIO = float(os.environ.get("SCENARIO_TRAIN_RATIO", "0.0"))
 
 
 # ── Fitness ────────────────────────────────────────────────────────────────────
@@ -217,10 +218,12 @@ def select_parent(gpc, pop):
 def gp(problem_set: ProblemSet):
     time_slots       = [prob.depot.close / NUM_TIME_SLOT for prob in problem_set]
     train_time_slots = [t / STRESS_FACTOR for t in time_slots]
+    # Tính toán 20% số lượng phần tử (làm tròn thành số nguyên)
+    limit = int(len(problem_set) * SCENARIO_TRAIN_RATIO) + 1
 
     training_problems = [
         prob.clone_training(t_slot * TRAIN_FACTOR, STRESS_FACTOR)
-        for prob, t_slot in zip(problem_set, time_slots)
+        for prob, t_slot in zip(problem_set[:limit], time_slots[:limit])
     ]
     training_problem_set = ProblemSet(training_problems)
 
