@@ -1,4 +1,4 @@
-name: Run Experiment 400
+name: Run Experiment 400 (Parallel)
 
 on:
   workflow_dispatch:
@@ -7,8 +7,13 @@ on:
       - '.github/workflows/run_400.yml'
 
 jobs:
-  run-400:
+  run-experiments:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # Nếu 1 luồng lỗi, các luồng khác vẫn tiếp tục chạy
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7] # 8 luồng chạy song song
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,24 +27,60 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Experiment 400 (all instances, 16 scenarios each)
+      - name: Prepare Subset Dataset for Shard ${{ matrix.shard }}
         run: |
-          python python_src/main.py datasets/h400_new
+          # Tạo một thư mục tạm để chứa data của riêng luồng này
+          mkdir -p temp_dataset
+          # Chia 56 files vào 8 luồng (dùng phép chia lấy dư) và copy sang thư mục tạm
+          ls datasets/h400_new/ | awk -v shard=${{ matrix.shard }} 'NR%8==shard' | xargs -I {} cp datasets/h400_new/{} temp_dataset/
+
+      - name: Run Experiment 400 (Subset ${{ matrix.shard }})
+        run: |
+          # Chạy code trên thư mục tạm vừa tạo thay vì toàn bộ thư mục gốc
+          python python_src/main.py temp_dataset
         env:
-          LOG_MAIN: result.log
-          LOG_HEU: result.log
-          LOG_GP: result.log
-          LOG_LASTPOP: result.log
-          LOG_LASTROUTE: result.log
+          # Đặt tên file log theo từng luồng để không bị ghi đè khi gom lại
+          LOG_MAIN: result_${{ matrix.shard }}.log
+          LOG_HEU: result_${{ matrix.shard }}.log
+          LOG_GP: result_${{ matrix.shard }}.log
+          LOG_LASTPOP: result_${{ matrix.shard }}.log
+          LOG_LASTROUTE: result_${{ matrix.shard }}.log
 
-      - name: Aggregate Results
-        run: |
-          python aggregate_results.py result.log summary_h400.csv
-
-      - name: Upload Results
+      - name: Upload Partial Results
         uses: actions/upload-artifact@v4
         with:
-          name: results-400
+          name: results-shard-${{ matrix.shard }}
+          path: result_${{ matrix.shard }}.log
+
+  aggregate:
+    needs: run-experiments # Job này chỉ chạy sau khi tất cả các luồng ma trận đã xong
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Download all partial results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: results-shard-*
+          merge-multiple: true # Tải tất cả các file log từ các luồng về chung 1 thư mục hiện tại
+
+      - name: Merge Logs and Aggregate Results
+        run: |
+          # Gộp tất cả các file result_0.log, result_1.log,... thành 1 file result.log duy nhất
+          cat result_*.log > result.log
+          
+          # Chạy file tổng hợp như cũ
+          python aggregate_results.py result.log summary_h400.csv
+
+      - name: Upload Final Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-results-400
           path: |
             result.log
             summary_h400.csv
