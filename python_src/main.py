@@ -45,28 +45,35 @@ from collections import defaultdict
 from typing import List, Dict
 from dotenv import load_dotenv, find_dotenv
 
-HERE = os.path.dirname(__file__)
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(HERE)  # one level up from python_src/
 
 dotenv_path = find_dotenv()
 if not dotenv_path:
-    alt = os.path.normpath(os.path.join(HERE, '..', '.env'))
+    alt = os.path.join(REPO_ROOT, '.env')
     if os.path.exists(alt):
         dotenv_path = alt
 if dotenv_path:
     load_dotenv(dotenv_path)
 
-# Ensure `python_src` is on the import path so package-style imports work.
+# Add python_src/ itself to sys.path so that `gp`, `sim`, `log`
+# are importable as top-level packages (they live inside python_src/).
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
+# Also add repo root so callers from outside can still do
+# `python python_src/main.py ...` without PYTHONPATH tricks.
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
-# load ports via normal package imports
-from python_src.gp import mod as gp_mod
-from python_src.gp import GPtree as gp_program
-from python_src.log import logger as log_mod
-from python_src.sim import mod as sim_mod
-from python_src.sim import ctx as sim_ctx
-from python_src.sim import problem as problem_mod
-from python_src.sim.problem import ProblemSet
+# load ports via direct subpackage imports (no `python_src.` prefix needed
+# because HERE == python_src/ is already on sys.path)
+from gp import mod as gp_mod
+from gp import GPtree as gp_program
+from log import logger as log_mod
+from sim import mod as sim_mod
+from sim import ctx as sim_ctx
+from sim import problem as problem_mod
+from sim.problem import ProblemSet
 
 # Loggers
 MAIN    = log_mod.Logger("MAIN")
