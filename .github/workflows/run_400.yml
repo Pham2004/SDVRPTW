@@ -22,15 +22,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Experiment 400
+      - name: Run Experiment 400 (all instances, 16 scenarios each)
         run: |
-          python python_src/main.py datasets/h400_new 5
-        env:
-          LOG_MAIN: result.log
-          LOG_HEU: result.log
-          LOG_GP: result.log
-          LOG_LASTPOP: result.log
-          LOG_LASTROUTE: result.log
+          python python_src/main.py datasets/h400_new 16
 
       - name: Aggregate Results
         run: |
