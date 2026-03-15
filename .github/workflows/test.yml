@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - '.github/workflows/run_100.yml'
+      - '.github/workflows/test.yml'
 
 jobs:
   run-100:
