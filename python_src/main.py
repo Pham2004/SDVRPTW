@@ -24,29 +24,34 @@ Notes:
 CLI Usage:
     python main.py <target_path> [num_instances] [num_scenarios]
 
-    <target_path>   : thư mục chứa các file CSV (vd: datasets/h100_new)
-    [num_instances] : số lượng instance (h100c101, h100c102, ...) cần chạy
-                      (mặc định: tất cả)
+    <target_path>   : thư mục gốc chứa các subfolder instance
+                      (vd: datasets/h100_new)
+    [num_instances] : số lượng instance cần chạy (mặc định: tất cả)
     [num_scenarios] : số lượng scenarios mỗi instance (mặc định: 16)
 
-    File naming convention:  <prefix>_<scenario>.csv
-    Ví dụ: h100c101_1.csv, h100c101_2.csv, ..., h100c101_16.csv
-           h100c102_1.csv, ...
+Dataset structure (sau khi reorganize):
+    datasets/h100_new/
+        h100c101/
+            h100c101_1.csv
+            h100c101_2.csv
+            ...
+        h100c102/
+            h100c102_1.csv
+            ...
 
-    Mỗi instance sẽ tạo một ProblemSet từ tất cả scenarios của nó và chạy
-    heuristics + GP trên ProblemSet đó.
+    Mỗi subfolder = 1 instance. Tên subfolder = tên instance.
+    Các file CSV bên trong = các scenarios của instance đó.
 """
 import os
 import sys
 import re
 import glob
 import random
-from collections import defaultdict
 from typing import List, Dict
 from dotenv import load_dotenv, find_dotenv
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(HERE)  # one level up from python_src/
+HERE      = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(HERE)
 
 dotenv_path = find_dotenv()
 if not dotenv_path:
@@ -56,17 +61,11 @@ if not dotenv_path:
 if dotenv_path:
     load_dotenv(dotenv_path)
 
-# Add python_src/ itself to sys.path so that `gp`, `sim`, `log`
-# are importable as top-level packages (they live inside python_src/).
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
-# Also add repo root so callers from outside can still do
-# `python python_src/main.py ...` without PYTHONPATH tricks.
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-# load ports via direct subpackage imports (no `python_src.` prefix needed
-# because HERE == python_src/ is already on sys.path)
 from gp import mod as gp_mod
 from gp import GPtree as gp_program
 from log import logger as log_mod
@@ -76,30 +75,30 @@ from sim import problem as problem_mod
 from sim.problem import ProblemSet
 
 # Loggers
-MAIN    = log_mod.Logger("MAIN")
-HEU     = log_mod.Logger("HEU")
-SIM     = log_mod.Logger("SIM")
-GP      = log_mod.Logger("GP")
-LASTPOP = log_mod.Logger("LASTPOP")
+MAIN      = log_mod.Logger("MAIN")
+HEU       = log_mod.Logger("HEU")
+SIM       = log_mod.Logger("SIM")
+GP        = log_mod.Logger("GP")
+LASTPOP   = log_mod.Logger("LASTPOP")
 LASTROUTE = log_mod.Logger("LASTROUTE")
-ROUTE   = log_mod.Logger("ROUTE")
+ROUTE     = log_mod.Logger("ROUTE")
 ROUTEEVAL = log_mod.Logger("ROUTEEVAL")
-DEBUG   = log_mod.Logger("DEBUG")
+DEBUG     = log_mod.Logger("DEBUG")
 
-# ── Configs (match Rust defaults) ──────────────────────────────────────────────
-CONST_RATE      = float(os.environ.get("CONST_RATE",      "0.0"))
-WEIGHT          = float(os.environ.get("WEIGHT",          "0.5"))
-LATE_WEIGHT     = float(os.environ.get("LATE_WEIGHT",     "1"))
-PENDING_WEIGHT  = float(os.environ.get("PENDING_WEIGHT",  "2"))
+# ── Configs ────────────────────────────────────────────────────────────────────
+CONST_RATE           = float(os.environ.get("CONST_RATE",           "0.0"))
+WEIGHT               = float(os.environ.get("WEIGHT",               "0.5"))
+LATE_WEIGHT          = float(os.environ.get("LATE_WEIGHT",          "1"))
+PENDING_WEIGHT       = float(os.environ.get("PENDING_WEIGHT",       "2"))
 
-NUM_TIME_SLOT   = float(os.environ.get("NUM_TIME_SLOT",   "20.0"))
-NUM_GEN         = int(os.environ.get("NUM_GEN",           "100"))
-POP_SIZE        = int(os.environ.get("POP_SIZE",          "100"))
-MAX_DEPTH       = int(os.environ.get("MAX_DEPTH",         "6"))
-CROSSOVER_RATE  = float(os.environ.get("CROSSOVER_RATE",  "0.8"))
-MUTATION_RATE   = float(os.environ.get("MUTATION_RATE",   "0.15"))
-TRAIN_FACTOR    = float(os.environ.get("TRAIN_FACTOR",    "2.0"))
-STRESS_FACTOR   = float(os.environ.get("STRESS_FACTOR",   "1.0"))
+NUM_TIME_SLOT        = float(os.environ.get("NUM_TIME_SLOT",        "20.0"))
+NUM_GEN              = int(os.environ.get("NUM_GEN",                "100"))
+POP_SIZE             = int(os.environ.get("POP_SIZE",               "100"))
+MAX_DEPTH            = int(os.environ.get("MAX_DEPTH",              "6"))
+CROSSOVER_RATE       = float(os.environ.get("CROSSOVER_RATE",       "0.8"))
+MUTATION_RATE        = float(os.environ.get("MUTATION_RATE",        "0.15"))
+TRAIN_FACTOR         = float(os.environ.get("TRAIN_FACTOR",         "2.0"))
+STRESS_FACTOR        = float(os.environ.get("STRESS_FACTOR",        "1.0"))
 SCENARIO_TRAIN_RATIO = float(os.environ.get("SCENARIO_TRAIN_RATIO", "0.0"))
 
 
@@ -218,8 +217,7 @@ def select_parent(gpc, pop):
 def gp(problem_set: ProblemSet):
     time_slots       = [prob.depot.close / NUM_TIME_SLOT for prob in problem_set]
     train_time_slots = [t / STRESS_FACTOR for t in time_slots]
-    # Tính toán 20% số lượng phần tử (làm tròn thành số nguyên)
-    limit = int(len(problem_set) * SCENARIO_TRAIN_RATIO) + 1
+    limit            = int(len(problem_set) * SCENARIO_TRAIN_RATIO) + 1
 
     training_problems = [
         prob.clone_training(t_slot * TRAIN_FACTOR, STRESS_FACTOR)
@@ -253,7 +251,6 @@ def gp(problem_set: ProblemSet):
                     gen=gen, result=(result[0], result[1]), fitness=result[2],
                     routing=str(pop[0].routing), sequencing=str(pop[0].sequencing))
 
-        # full evaluation on all scenarios
         full_results = []
         for prob, t_slot in zip(problem_set, time_slots):
             sim_best = sim_mod.Simulation(prob, pop[0].routing, pop[0].sequencing)
@@ -304,39 +301,78 @@ def gp(problem_set: ProblemSet):
         pop = new_pop
 
 
-# ── Instance grouping helper ───────────────────────────────────────────────────
-def group_scenarios(csv_files: List[str]) -> Dict[str, List[str]]:
+# ── Dataset discovery ──────────────────────────────────────────────────────────
+def discover_instances(target_dir: str, max_instances: int = None,
+                       max_scenarios: int = 16) -> Dict[str, List[str]]:
     """
-    Group CSV files by instance name (everything before the last underscore+number).
+    Duyệt <target_dir> và trả về dict { instance_name: [csv_paths] }.
 
-    Naming convention:  <instance>_<scenario>.csv
-    Example:            h100c101_1.csv  →  instance = "h100c101"
-                        h100c101_16.csv →  instance = "h100c101"
+    Hỗ trợ 2 layout:
 
-    Returns an ordered dict  { instance_name: [sorted list of file paths] }
+    Layout mới (subfolder):
+        target_dir/
+            h100c101/
+                h100c101_1.csv
+                h100c101_2.csv
+            h100c102/
+                h100c102_1.csv
+
+    Layout cũ (flat):
+        target_dir/
+            h100c101_1.csv
+            h100c101_2.csv
+            h100c102_1.csv
+
+    Với layout mới, tên subfolder = tên instance.
+    Với layout cũ, tên instance được suy ra từ tên file (phần trước _<số>).
     """
-    groups: Dict[str, List[str]] = defaultdict(list)
-    pattern = re.compile(r'^(.+)_(\d+)\.csv$', re.IGNORECASE)
+    scenario_pattern = re.compile(r'^(.+)_(\d+)\.csv$', re.IGNORECASE)
 
-    for f in csv_files:
-        basename = os.path.basename(f)
-        m = pattern.match(basename)
-        if m:
-            instance_name = m.group(1)           # e.g. "h100c101"
-            groups[instance_name].append(f)
-        else:
-            # File without _N suffix → treat as its own single-scenario instance
-            instance_name = os.path.splitext(basename)[0]
-            groups[instance_name].append(f)
+    instances: Dict[str, List[str]] = {}
 
-    # Sort each group's files by scenario number
-    def scenario_key(path):
-        m = pattern.match(os.path.basename(path))
-        return int(m.group(2)) if m else 0
+    # ── Layout mới: tìm các subfolder chứa CSV ─────────────────────────────
+    subdirs = sorted([
+        d for d in os.listdir(target_dir)
+        if os.path.isdir(os.path.join(target_dir, d))
+    ])
 
-    return {k: sorted(v, key=scenario_key) for k, sorted_v in
-            ((k, sorted(v, key=scenario_key)) for k, v in sorted(groups.items()))
-            for v in [sorted_v]}
+    if subdirs:
+        for subdir in subdirs:
+            subdir_path = os.path.join(target_dir, subdir)
+            csv_files   = sorted(
+                glob.glob(os.path.join(subdir_path, "*.csv")),
+                key=lambda p: _scenario_num(p, scenario_pattern)
+            )
+            if csv_files:
+                instances[subdir] = csv_files
+    else:
+        # ── Layout cũ: flat CSV files ───────────────────────────────────────
+        from collections import defaultdict
+        groups: Dict[str, List[str]] = defaultdict(list)
+        for f in sorted(glob.glob(os.path.join(target_dir, "*.csv"))):
+            basename = os.path.basename(f)
+            m        = scenario_pattern.match(basename)
+            inst     = m.group(1) if m else os.path.splitext(basename)[0]
+            groups[inst].append(f)
+        for inst, files in sorted(groups.items()):
+            instances[inst] = sorted(
+                files, key=lambda p: _scenario_num(p, scenario_pattern)
+            )
+
+    # ── Cắt giới hạn instance và scenario ─────────────────────────────────
+    instance_names = sorted(instances.keys())
+    if max_instances is not None:
+        instance_names = instance_names[:max_instances]
+
+    return {
+        name: instances[name][:max_scenarios]
+        for name in instance_names
+    }
+
+
+def _scenario_num(path: str, pattern: re.Pattern) -> int:
+    m = pattern.match(os.path.basename(path))
+    return int(m.group(2)) if m else 0
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -345,56 +381,51 @@ def main():
     Usage:
         python main.py <target_path> [num_instances] [num_scenarios]
 
-    <target_path>   : directory containing CSV files, e.g. datasets/h100_new
-    [num_instances] : max number of distinct instances to run  (default: all)
-    [num_scenarios] : max scenarios per instance to load       (default: 16)
+    <target_path>   : thư mục gốc chứa các subfolder instance
+                      (vd: datasets/h100_new)
+    [num_instances] : số instance tối đa cần chạy  (mặc định: tất cả)
+    [num_scenarios] : số scenarios tối đa mỗi instance (mặc định: 16)
 
-    The script discovers all *.csv files in <target_path>, groups them by
-    instance name (h100c101, h100c102, …), and for each instance builds a
-    ProblemSet from its scenarios, then runs heuristics and/or GP.
+    Cấu trúc dataset mới:
+        datasets/h100_new/
+            h100c101/
+                h100c101_1.csv
+                h100c101_2.csv
+                ...
+            h100c102/
+                ...
     """
     if len(sys.argv) < 2:
         print("usage: python main.py <target_path> [num_instances] [num_scenarios]")
         print()
-        print("  <target_path>   : directory with CSVs, e.g. datasets/h100_new")
-        print("  [num_instances] : max instances to run  (default: all)")
-        print("  [num_scenarios] : max scenarios/instance (default: 16)")
+        print("  <target_path>   : thư mục gốc chứa các subfolder instance")
+        print("                    (vd: datasets/h100_new)")
+        print("  [num_instances] : số instance tối đa cần chạy  (mặc định: tất cả)")
+        print("  [num_scenarios] : số scenarios/instance         (mặc định: 16)")
         sys.exit(1)
 
     target        = sys.argv[1]
     max_instances = int(sys.argv[2]) if len(sys.argv) >= 3 else None
     max_scenarios = int(sys.argv[3]) if len(sys.argv) >= 4 else 16
 
-    # ── Collect CSV files ──────────────────────────────────────────────────────
-    if '*' in target or '?' in target:
-        csv_files = sorted(glob.glob(target))
-    elif os.path.isdir(target):
-        csv_files = sorted(glob.glob(os.path.join(target, "*.csv")))
-    elif os.path.isfile(target):
-        csv_files = [target]
-    else:
-        csv_files = sorted(glob.glob(f"{target}*.csv"))
-
-    if not csv_files:
-        print(f"No CSV files found matching '{target}'")
+    if not os.path.isdir(target):
+        print(f"[ERROR] Không tìm thấy thư mục: '{target}'")
         sys.exit(1)
 
-    # ── Group by instance ──────────────────────────────────────────────────────
-    groups = group_scenarios(csv_files)
+    # ── Discover instances ─────────────────────────────────────────────────
+    instances = discover_instances(target, max_instances, max_scenarios)
 
-    instance_names = sorted(groups.keys())
-    if max_instances is not None:
-        instance_names = instance_names[:max_instances]
+    if not instances:
+        print(f"Không tìm thấy instance nào trong '{target}'")
+        sys.exit(1)
 
-    print(f"Found {len(groups)} instances total; running {len(instance_names)} instance(s).")
+    print(f"Tìm thấy {len(instances)} instance(s) sẽ chạy.")
     log_mod.log(MAIN, "start",
-                total_instances=len(instance_names),
+                total_instances=len(instances),
                 max_scenarios=max_scenarios)
 
-    # ── Run each instance ──────────────────────────────────────────────────────
-    for inst_name in instance_names:
-        scenario_files = groups[inst_name][:max_scenarios]
-
+    # ── Chạy từng instance ─────────────────────────────────────────────────
+    for inst_name, scenario_files in instances.items():
         print(f"\n{'='*60}")
         print(f"Instance: {inst_name}  ({len(scenario_files)} scenarios)")
         for f in scenario_files:
@@ -421,7 +452,7 @@ def main():
 
         log_mod.log(MAIN, "instance_done", instance=inst_name)
 
-    log_mod.log(MAIN, "all_done", instances_run=len(instance_names))
+    log_mod.log(MAIN, "all_done", instances_run=len(instances))
     print("\nAll instances done.")
 
 
