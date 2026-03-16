@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false # Nếu 1 luồng lỗi, các luồng khác vẫn tiếp tục chạy
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] # 8 luồng chạy song song
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] # 10 luồng chạy song song
 
     steps:
       - uses: actions/checkout@v4
@@ -31,8 +31,13 @@ jobs:
         run: |
           # Tạo một thư mục tạm để chứa data của riêng luồng này
           mkdir -p temp_dataset
-          # Chia 56 files vào 8 luồng (dùng phép chia lấy dư) và copy sang thư mục tạm
-          ls datasets/h100_new/ | awk -v shard=${{ matrix.shard }} 'NR%8==shard' | xargs -I {} cp datasets/h100_new/{} temp_dataset/
+          
+          # Chia files vào 10 luồng (dùng phép chia lấy dư cho 10) và copy sang thư mục tạm
+          ls datasets/h100_new/ | awk -v shard=${{ matrix.shard }} 'NR%10==shard' | xargs -I {} cp datasets/h100_new/{} temp_dataset/
+          
+          # In ra danh sách các file trong luồng này để dễ dàng kiểm tra trên log của GitHub
+          echo "Danh sách các file dataset chạy trong luồng ${{ matrix.shard }}:"
+          ls -l temp_dataset/
 
       - name: Run Experiment 100 (Subset ${{ matrix.shard }})
         run: |
