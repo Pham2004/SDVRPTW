@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false # Nếu 1 luồng lỗi, các luồng khác vẫn tiếp tục chạy
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7] # 8 luồng chạy song song
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] # 8 luồng chạy song song
 
     steps:
       - uses: actions/checkout@v4
