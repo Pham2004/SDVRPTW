@@ -10,9 +10,9 @@ jobs:
   run-experiments:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false # Nếu 1 luồng lỗi, các luồng khác vẫn tiếp tục chạy
+      fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] # 10 luồng chạy song song
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] # 10 luồng song song
 
     steps:
       - uses: actions/checkout@v4
@@ -29,26 +29,40 @@ jobs:
 
       - name: Prepare Subset Dataset for Shard ${{ matrix.shard }}
         run: |
-          # Tạo một thư mục tạm để chứa data của riêng luồng này
           mkdir -p temp_dataset
-          
-          # Chia files vào 10 luồng (dùng phép chia lấy dư cho 10) và copy sang thư mục tạm
-          ls datasets/h100_new/ | awk -v shard=${{ matrix.shard }} 'NR%10==shard' | xargs -I {} cp datasets/h100_new/{} temp_dataset/
-          
-          # In ra danh sách các file trong luồng này để dễ dàng kiểm tra trên log của GitHub
-          echo "Danh sách các file dataset chạy trong luồng ${{ matrix.shard }}:"
+
+          # Lấy danh sách các subfolder instance, chia đều cho 10 luồng theo index % 10
+          # Mỗi subfolder = 1 instance (vd: h100c101/, h100c102/, ...)
+          instances=$(ls -d datasets/h100_new/*/ | awk -F'/' '{print $(NF-1)}' | awk -v shard=${{ matrix.shard }} 'NR%10==shard')
+
+          if [ -z "$instances" ]; then
+            echo "Không có instance nào được gán cho shard ${{ matrix.shard }}, bỏ qua."
+            exit 0
+          fi
+
+          # Copy toàn bộ subfolder của từng instance sang temp_dataset/
+          for inst in $instances; do
+            cp -r "datasets/h100_new/$inst" "temp_dataset/$inst"
+          done
+
+          echo "Danh sách instance trong shard ${{ matrix.shard }}:"
           ls -l temp_dataset/
 
-      - name: Run Experiment 100 (Subset ${{ matrix.shard }})
+      - name: Run Experiment (Shard ${{ matrix.shard }})
         run: |
-          # Chạy code trên thư mục tạm vừa tạo thay vì toàn bộ thư mục gốc
+          # Bỏ qua nếu shard này không có instance nào
+          if [ -z "$(ls -A temp_dataset 2>/dev/null)" ]; then
+            echo "Shard ${{ matrix.shard }} không có dữ liệu, bỏ qua."
+            exit 0
+          fi
+
           python python_src/main.py temp_dataset
         env:
-          # Đặt tên file log theo từng luồng để không bị ghi đè khi gom lại
-          LOG_MAIN: result_${{ matrix.shard }}.log
-          LOG_HEU: result_${{ matrix.shard }}.log
-          LOG_GP: result_${{ matrix.shard }}.log
-          LOG_LASTPOP: result_${{ matrix.shard }}.log
+          SEED:          42
+          LOG_MAIN:      result_${{ matrix.shard }}.log
+          LOG_HEU:       result_${{ matrix.shard }}.log
+          LOG_GP:        result_${{ matrix.shard }}.log
+          LOG_LASTPOP:   result_${{ matrix.shard }}.log
           LOG_LASTROUTE: result_${{ matrix.shard }}.log
 
       - name: Upload Partial Results
@@ -58,7 +72,7 @@ jobs:
           path: result_${{ matrix.shard }}.log
 
   aggregate:
-    needs: run-experiments # Job này chỉ chạy sau khi tất cả các luồng ma trận đã xong
+    needs: run-experiments
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,14 +86,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: results-shard-*
-          merge-multiple: true # Tải tất cả các file log từ các luồng về chung 1 thư mục hiện tại
+          merge-multiple: true
 
       - name: Merge Logs and Aggregate Results
         run: |
-          # Gộp tất cả các file result_0.log, result_1.log,... thành 1 file result.log duy nhất
+          # Gộp tất cả result_0.log ... result_9.log thành result.log
           cat result_*.log > result.log
-          
-          # Chạy file tổng hợp như cũ
+
           python aggregate_results.py result.log summary_h100.csv
 
       - name: Upload Final Results
