@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] # 15 luồng song song
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] # 20 luồng song song
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -24,9 +24,9 @@ jobs:
       - name: Prepare Subset Dataset for Shard ${{ matrix.shard }}
         run: |
           mkdir -p temp_dataset
-          # Lấy danh sách các subfolder instance, chia đều cho 15 luồng theo index % 15
+          # Lấy danh sách các subfolder instance, chia đều cho 20 luồng theo index % 20
           # Mỗi subfolder = 1 instance (vd: h400c101/, h400c102/, ...)
-          instances=$(ls -d datasets/h400_new/*/ | awk -F'/' '{print $(NF-1)}' | awk -v shard=${{ matrix.shard }} 'NR%15==shard')
+          instances=$(ls -d datasets/h400_new/*/ | awk -F'/' '{print $(NF-1)}' | awk -v shard=${{ matrix.shard }} 'NR%20==shard')
           if [ -z "$instances" ]; then
             echo "Không có instance nào được gán cho shard ${{ matrix.shard }}, bỏ qua."
             exit 0
@@ -73,7 +73,7 @@ jobs:
           merge-multiple: true
       - name: Merge Logs and Aggregate Results
         run: |
-          # Gộp tất cả result_0.log ... result_14.log thành result.log
+          # Gộp tất cả result_0.log ... result_19.log thành result.log
           cat result_*.log > result.log
           python aggregate_results.py result.log summary_h400.csv
       - name: Upload Final Results
