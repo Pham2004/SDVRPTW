@@ -46,6 +46,7 @@ import os
 import sys
 import re
 import glob
+import math
 import random
 from typing import List, Dict
 from dotenv import load_dotenv, find_dotenv
@@ -217,7 +218,7 @@ def select_parent(gpc, pop):
 def gp(problem_set: ProblemSet):
     time_slots       = [prob.depot.close / NUM_TIME_SLOT for prob in problem_set]
     train_time_slots = [t / STRESS_FACTOR for t in time_slots]
-    limit            = int(len(problem_set) * SCENARIO_TRAIN_RATIO) + 1
+    limit            = math.ceil(len(problem_set) * SCENARIO_TRAIN_RATIO)
 
     training_problems = [
         prob.clone_training(t_slot * TRAIN_FACTOR, STRESS_FACTOR)

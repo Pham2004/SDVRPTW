@@ -46,12 +46,13 @@ jobs:
           fi
           python python_src/main.py temp_dataset
         env:
-          SEED:          42
-          LOG_MAIN:      result_${{ matrix.shard }}.log
-          LOG_HEU:       result_${{ matrix.shard }}.log
-          LOG_GP:        result_${{ matrix.shard }}.log
-          LOG_LASTPOP:   result_${{ matrix.shard }}.log
-          LOG_LASTROUTE: result_${{ matrix.shard }}.log
+          SEED:                 42
+          SCENARIO_TRAIN_RATIO: "0.2"
+          LOG_MAIN:             result_${{ matrix.shard }}.log
+          LOG_HEU:              result_${{ matrix.shard }}.log
+          LOG_GP:               result_${{ matrix.shard }}.log
+          LOG_LASTPOP:          result_${{ matrix.shard }}.log
+          LOG_LASTROUTE:        result_${{ matrix.shard }}.log
       - name: Upload Partial Results
         uses: actions/upload-artifact@v4
         with:
