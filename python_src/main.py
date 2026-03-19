@@ -413,6 +413,25 @@ def main():
         print(f"[ERROR] Không tìm thấy thư mục: '{target}'")
         sys.exit(1)
 
+    # ── Xác định num_trucks và truck_capacity theo kích thước bộ dữ liệu ──
+    _DATASET_CFG = {
+        100: (10,  200),
+        200: (50,  400),
+        400: (100, 800),
+    }
+    _target_str = target.replace("\\", "/")
+    _dataset_size = next(
+        (s for s in (400, 200, 100) if str(s) in _target_str.split("/")),
+        None
+    )
+    if _dataset_size is None:
+        print("[WARNING] Không nhận diện được kích thước bộ dữ liệu từ đường dẫn. "
+              "Dùng mặc định: num_trucks=10, truck_capacity=200")
+        _num_trucks, _truck_capacity = 10, 200
+    else:
+        _num_trucks, _truck_capacity = _DATASET_CFG[_dataset_size]
+        print(f"Bộ dữ liệu {_dataset_size}: num_trucks={_num_trucks}, truck_capacity={_truck_capacity}")
+
     # ── Discover instances ─────────────────────────────────────────────────
     instances = discover_instances(target, max_instances, max_scenarios)
 
@@ -435,8 +454,8 @@ def main():
         problem_set = ProblemSet.load_from_csvs(
             scenario_files,
             truck_speed=1.0,
-            truck_capacity=1300.0,
-            num_trucks=10,
+            truck_capacity=float(_truck_capacity),
+            num_trucks=_num_trucks,
         )
 
         log_mod.log(MAIN, "instance_start",
