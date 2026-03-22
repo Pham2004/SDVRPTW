@@ -59,7 +59,7 @@ jobs:
           python python_src/main.py temp_dataset
         env:
           SEED:                 42
-          SCENARIO_TRAIN_RATIO: "0.1"
+          SCENARIO_TRAIN_RATIO: "0.05"
           LOG_MAIN:             result_${{ matrix.shard }}.log
           LOG_HEU:              result_${{ matrix.shard }}.log
           LOG_GP:               result_${{ matrix.shard }}.log
