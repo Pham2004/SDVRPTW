@@ -1,0 +1,136 @@
+name: Run Experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      orders:
+        description: 'Số đơn hàng (dataset)'
+        required: true
+        type: choice
+        options:
+          - '100'
+          - '200'
+          - '400'
+        default: '100'
+      algorithm:
+        description: 'Thuật toán'
+        required: true
+        type: choice
+        options:
+          - gp
+          - aco
+        default: gp
+      seed:
+        description: 'Random seed'
+        required: true
+        default: '42'
+
+jobs:
+  run-experiments:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare Subset Dataset for Shard ${{ matrix.shard }}
+        run: |
+          mkdir -p temp_dataset
+          DATASET="datasets/h${{ github.event.inputs.orders }}_new"
+
+          instances=$(ls -d $DATASET/*/ | awk -F'/' '{print $(NF-1)}' | awk -v shard=${{ matrix.shard }} 'NR%30==shard')
+
+          if [ -z "$instances" ]; then
+            echo "Không có instance nào cho shard ${{ matrix.shard }}, bỏ qua."
+            exit 0
+          fi
+
+          for inst in $instances; do
+            cp -r "$DATASET/$inst" "temp_dataset/$inst"
+          done
+
+          echo "Shard ${{ matrix.shard }} — instances:"
+          ls -l temp_dataset/
+
+      - name: Run Experiment (Shard ${{ matrix.shard }})
+        run: |
+          if [ -z "$(ls -A temp_dataset 2>/dev/null)" ]; then
+            echo "Shard ${{ matrix.shard }} không có dữ liệu, bỏ qua."
+            exit 0
+          fi
+
+          if [ "${{ github.event.inputs.algorithm }}" = "gp" ]; then
+            python python_src/main.py temp_dataset
+          else
+            python python_src/aco_dvrptw.py temp_dataset
+          fi
+        env:
+          SEED:                 ${{ github.event.inputs.seed }}
+          # GP env vars
+          SCENARIO_TRAIN_RATIO: "0.05"
+          LOG_MAIN:             result_${{ matrix.shard }}.log
+          LOG_HEU:              result_${{ matrix.shard }}.log
+          LOG_GP:               result_${{ matrix.shard }}.log
+          LOG_LASTPOP:          result_${{ matrix.shard }}.log
+          LOG_LASTROUTE:        result_${{ matrix.shard }}.log
+          # ACO env vars
+          LOG_ACO:              result_${{ matrix.shard }}.log
+
+      - name: Upload Partial Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-shard-${{ matrix.shard }}
+          path: result_${{ matrix.shard }}.log
+
+  aggregate:
+    needs: run-experiments
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Download all partial results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: results-shard-*
+          merge-multiple: true
+
+      - name: Merge and Aggregate Results
+        run: |
+          cat result_*.log > result.log
+
+          ALG="${{ github.event.inputs.algorithm }}"
+          ORD="${{ github.event.inputs.orders }}"
+          SEED="${{ github.event.inputs.seed }}"
+          CSV="summary_${ALG}_h${ORD}_seed${SEED}.csv"
+
+          if [ "$ALG" = "gp" ]; then
+            python aggregate_results.py result.log "$CSV"
+          else
+            python aggregate_aco_results.py result.log "$CSV"
+          fi
+
+      - name: Upload Final Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ github.event.inputs.algorithm }}-h${{ github.event.inputs.orders }}-seed${{ github.event.inputs.seed }}
+          path: |
+            result.log
+            summary_${{ github.event.inputs.algorithm }}_h${{ github.event.inputs.orders }}_seed${{ github.event.inputs.seed }}.csv
