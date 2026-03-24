@@ -58,6 +58,7 @@ jobs:
 
           python python_src/aco_dvrptw.py temp_dataset
         env:
+          SEED:    42
           LOG_ACO: aco_result_${{ matrix.shard }}.log
 
       - name: Upload Partial Results

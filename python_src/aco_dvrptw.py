@@ -671,6 +671,21 @@ def main() -> None:
 
     TRUCK_SPEED = 1.0
 
+    # ── Seed (giống main.py: đọc từ env var SEED) ───────────────────
+    _seed_env = os.environ.get("SEED", "")
+    _seed_val: Optional[int] = None
+    if _seed_env:
+        try:
+            _seed_val = int(_seed_env)
+        except ValueError:
+            pass
+    if _seed_val is not None:
+        random.seed(_seed_val)
+        np.random.seed(_seed_val)
+        print(f" Seed            : {_seed_val}")
+    else:
+        print(" Seed            : (none – non-deterministic)")
+
     MAX_EVALUATIONS = 10_000
     NUM_ANTS        = 50
     ALPHA, BETA, RHO, Q = 1.0, 2.0, 0.6, 0.005
