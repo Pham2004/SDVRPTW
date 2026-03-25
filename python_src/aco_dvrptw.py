@@ -342,7 +342,7 @@ class DynamicACO:
     def __init__(
         self,
         problem_set:     ProblemSet,
-        max_evaluations: int   = 10_000,
+        max_evaluations: int   = 160_000,
         num_ants:        int   = 50,
         alpha:           float = 1.0,
         beta:            float = 2.0,
@@ -686,7 +686,7 @@ def main() -> None:
     else:
         print(" Seed            : (none – non-deterministic)")
 
-    MAX_EVALUATIONS = 10_000
+    MAX_EVALUATIONS = 160_000   # 10_000 × 16 scenarios = fair vs GP (GP trains on 1 scenario)
     NUM_ANTS        = 50
     ALPHA, BETA, RHO, Q = 1.0, 2.0, 0.6, 0.005
 
