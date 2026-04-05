@@ -135,10 +135,6 @@ def heuristics(problem_set: ProblemSet):
     except Exception:
         WIQ = gp_program.Program.terminal(1)
     try:
-        PR  = sim_ctx.RoutingProgram.terminal(5)
-    except Exception:
-        PR  = gp_program.Program.terminal(5)
-    try:
         PS  = sim_ctx.SequencingProgram.terminal(6)
     except Exception:
         PS  = gp_program.Program.terminal(6)
@@ -146,7 +142,7 @@ def heuristics(problem_set: ProblemSet):
     time_slots = [prob.depot.close / NUM_TIME_SLOT for prob in problem_set]
 
     for name, r, s in [("C+C", CR, CS), ("C+W", CR, W), ("WIQ+C", WIQ, CS),
-                       ("P+P", PR, PS), ("C+P", CR, PS), ("P+W", PR, W)]:
+                       ("C+P", CR, PS), ("WIQ+P", WIQ, PS)]:
         results = []
         for prob, t_slot in zip(problem_set, time_slots):
             sim = sim_mod.Simulation(prob, r, s)

@@ -117,14 +117,11 @@ class RoutingContext(ProgramContext):
             return self.vehicle_state.raw_time_cost(self.problem, self.request, self.time) / self.problem.depot.close
         if idx == 4:
             return self.request.demand / float(self.problem.total_demand())
-        if idx == 5:
-            max_profit = max((r[0].profit for r in self.vehicle_state.queue), default=0.0)
-            return self.request.profit / max_profit if max_profit > 1e-4 else 0.0
         raise RuntimeError("invalid terminal index for RoutingContext")
 
     @staticmethod
     def num_terminals() -> int:
-        return 6
+        return 5
 
 
 class SequencingContext(ProgramContext):
@@ -169,8 +166,9 @@ class SequencingContext(ProgramContext):
         if idx == 5:
             return self.request.time / self.problem.depot.close
         if idx == 6:
+            # Negated so MIN-selection (in sequencing) picks the highest-profit request first
             max_profit = max((r[0].profit for r in self.vehicle_state.queue), default=0.0)
-            return self.request.profit / max_profit if max_profit > 1e-4 else 0.0
+            return -(self.request.profit / max_profit) if max_profit > 1e-4 else 0.0
         raise RuntimeError("invalid terminal index for SequencingContext")
 
     @staticmethod
