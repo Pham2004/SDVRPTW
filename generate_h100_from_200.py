@@ -22,7 +22,7 @@ def parse_solomon_200(filepath):
             parts = line.strip().split()
             if len(parts) >= 7:
                 data_lines.append(parts)
-            if len(data_lines) == 101: # Depot + 100 customers
+            if len(data_lines) == 401: # Depot + 400 customers
                 break
                 
     # Create DataFrame

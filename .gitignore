@@ -1,9 +1,13 @@
-/target
-.env
-*.jsonl
-*.log
-*.pyth
-__pycache__/
-.vscode/
-summary_*.csv
-!summary_results.csv
+# Ignore everything
+*
+
+# Keep only these directories
+!python_src/
+!python_src/**
+!.github/
+!.github/**
+!datasets/
+!datasets/**
+
+# Always keep .gitignore itself
+!.gitignore

@@ -84,27 +84,39 @@ def aggregate(log_file: str, output_file: str):
         default=0,
     )
 
+    scen_cols = []
+    for i in range(max_scen):
+        scen_cols += [f"Scen{i+1}_Fitness", f"Scen{i+1}_Profit", f"Scen{i+1}_Distance"]
+
     fieldnames = [
-        "Instance", "AvgFitness", "BestFitnessSearch",
-        "Evaluations", "ElapsedS",
-    ] + [f"Scen{i+1}_Fitness" for i in range(max_scen)]
+        "Instance", "AvgFitness", "AvgProfit", "AvgDistance",
+        "BestFitnessSearch", "Evaluations", "ElapsedS",
+    ] + scen_cols
 
     rows = []
     for inst in all_instances:
         summ  = summaries.get(inst, {})
         scens = scenarios_by_instance.get(inst, [])
-        # Sort by scenario number
         scens_sorted = sorted(scens, key=lambda x: x.get("scenario", 0))
+
+        profits   = [s["profit"]   for s in scens_sorted if s.get("profit")   is not None]
+        distances = [s["distance"] for s in scens_sorted if s.get("distance") is not None]
+        avg_profit   = round(sum(profits)   / len(profits),   6) if profits   else None
+        avg_distance = round(sum(distances) / len(distances), 6) if distances else None
 
         row = {
             "Instance":           inst,
             "AvgFitness":         summ.get("avg_final_fitness"),
+            "AvgProfit":          avg_profit,
+            "AvgDistance":        avg_distance,
             "BestFitnessSearch":  summ.get("best_fitness_search"),
             "Evaluations":        summ.get("evaluations"),
             "ElapsedS":           summ.get("elapsed_s"),
         }
         for i, s in enumerate(scens_sorted):
-            row[f"Scen{i+1}_Fitness"] = s.get("fitness")
+            row[f"Scen{i+1}_Fitness"]  = s.get("fitness")
+            row[f"Scen{i+1}_Profit"]   = s.get("profit")
+            row[f"Scen{i+1}_Distance"] = s.get("distance")
         rows.append(row)
 
     with open(output_file, "w", newline="", encoding="utf-8") as f:

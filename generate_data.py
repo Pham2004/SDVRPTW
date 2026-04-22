@@ -93,7 +93,7 @@ def generate_datasets(input_dir, output_dir):
 
         # Step 3: Generate 50 testcases... this loop IS generating one of the 50.
         # For stochastic indices, randomize x, y, demand
-        for i in range(1, 51): # Generate 50 files
+        for i in range(1, 17): # Generate 50 files
             new_df = df.copy()
             new_df.loc[stochastic_indices, 'x'] = np.random.uniform(min_x, max_x, size=len(stochastic_indices))
             new_df.loc[stochastic_indices, 'y'] = np.random.uniform(min_y, max_y, size=len(stochastic_indices))
@@ -136,13 +136,13 @@ def generate_datasets(input_dir, output_dir):
 if __name__ == "__main__":
     # Assuming the script is run from the project root or we specify the path
     # The user is in f:\GP-DVRPTW-main\GP-DVRPTW-main
-    target_dir = os.path.join(os.getcwd(), 'datasets', 'h400')
-    output_dir = os.path.join(os.getcwd(), 'datasets', 'h400_new')
+    target_dir = os.path.join(os.getcwd(), 'datasets', 'h200')
+    output_dir = os.path.join(os.getcwd(), 'datasets', 'h200_new')
     if os.path.exists(target_dir):
         generate_datasets(target_dir, output_dir)
     else:
         # Fallback or try absolute path if cwd is wrong
-        target_dir = r"f:\GP-DVRPTW-main\GP-DVRPTW-main\datasets\h400"
+        target_dir = r"f:\GP-DVRPTW-main\GP-DVRPTW-main\datasets\h200"
         if os.path.exists(target_dir):
             generate_datasets(target_dir, output_dir)
         else:

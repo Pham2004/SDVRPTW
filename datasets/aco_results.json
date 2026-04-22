@@ -1,0 +1,123 @@
+{
+  "h100c101": {
+    "best_fitness_search": 0.24639,
+    "avg_final_fitness": 0.24639,
+    "evaluations": 10000,
+    "elapsed_s": 418.4,
+    "per_scenario": [
+      {
+        "scenario": 1,
+        "distance": 1406.3702,
+        "profit": 226.9727,
+        "fitness": 0.26383,
+        "served": 58
+      },
+      {
+        "scenario": 2,
+        "distance": 1364.9747,
+        "profit": 275.6099,
+        "fitness": 0.23079,
+        "served": 58
+      },
+      {
+        "scenario": 3,
+        "distance": 1290.6283,
+        "profit": 190.3589,
+        "fitness": 0.29244,
+        "served": 53
+      },
+      {
+        "scenario": 4,
+        "distance": 1521.1512,
+        "profit": 255.6059,
+        "fitness": 0.2104,
+        "served": 67
+      },
+      {
+        "scenario": 5,
+        "distance": 1516.4336,
+        "profit": 230.2793,
+        "fitness": 0.24727,
+        "served": 60
+      },
+      {
+        "scenario": 6,
+        "distance": 1536.2702,
+        "profit": 269.7216,
+        "fitness": 0.23335,
+        "served": 62
+      },
+      {
+        "scenario": 7,
+        "distance": 1387.8989,
+        "profit": 245.4015,
+        "fitness": 0.22456,
+        "served": 62
+      },
+      {
+        "scenario": 8,
+        "distance": 1364.3692,
+        "profit": 237.5857,
+        "fitness": 0.23904,
+        "served": 62
+      },
+      {
+        "scenario": 9,
+        "distance": 1463.3267,
+        "profit": 259.2954,
+        "fitness": 0.24131,
+        "served": 60
+      },
+      {
+        "scenario": 10,
+        "distance": 1566.0668,
+        "profit": 232.2845,
+        "fitness": 0.23048,
+        "served": 65
+      },
+      {
+        "scenario": 11,
+        "distance": 1392.0132,
+        "profit": 219.2389,
+        "fitness": 0.26431,
+        "served": 57
+      },
+      {
+        "scenario": 12,
+        "distance": 1229.804,
+        "profit": 174.5675,
+        "fitness": 0.30986,
+        "served": 51
+      },
+      {
+        "scenario": 13,
+        "distance": 1448.8976,
+        "profit": 249.239,
+        "fitness": 0.23963,
+        "served": 63
+      },
+      {
+        "scenario": 14,
+        "distance": 1691.257,
+        "profit": 247.1376,
+        "fitness": 0.21952,
+        "served": 69
+      },
+      {
+        "scenario": 15,
+        "distance": 1258.0821,
+        "profit": 205.6035,
+        "fitness": 0.24699,
+        "served": 58
+      },
+      {
+        "scenario": 16,
+        "distance": 1437.9382,
+        "profit": 226.7757,
+        "fitness": 0.24847,
+        "served": 62
+      }
+    ],
+    "fitness_history": []
+  }
+}
