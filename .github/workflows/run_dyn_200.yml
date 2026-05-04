@@ -2,6 +2,12 @@ name: Run Experiment 200 Dyn (Parallel)
 
 on:
   workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Random seed'
+        required: false
+        default: '42'
+        type: string
   push:
     paths:
       - '.github/workflows/run_dyn_200.yml'
@@ -51,7 +57,7 @@ jobs:
           fi
           python python_src/main.py temp_dataset
         env:
-          SEED:                 42
+          SEED:                 ${{ inputs.seed || '42' }}
           SCENARIO_TRAIN_RATIO: "0.05"
           LOG_MAIN:             result_dyn${{ matrix.dyn }}_${{ matrix.shard }}.log
           LOG_HEU:              result_dyn${{ matrix.dyn }}_${{ matrix.shard }}.log
