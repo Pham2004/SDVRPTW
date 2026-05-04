@@ -1,0 +1,100 @@
+name: Run Experiment 200 Dyn (Parallel)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/run_dyn_200.yml'
+
+jobs:
+  run-experiments:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dyn:   [10, 30, 50, 70]
+        shard: [0, 1, 2, 3, 4, 5]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare Subset Dataset (dyn=${{ matrix.dyn }} shard=${{ matrix.shard }})
+        run: |
+          mkdir -p temp_dataset
+          DATA_DIR="datasets/h200_dyn${{ matrix.dyn }}"
+          instances=$(ls -d ${DATA_DIR}/*/ | awk -F'/' '{print $(NF-1)}' | awk -v shard=${{ matrix.shard }} 'NR%6==shard')
+
+          if [ -z "$instances" ]; then
+            echo "Shard ${{ matrix.shard }} (dyn=${{ matrix.dyn }}) không có instance, bỏ qua."
+            exit 0
+          fi
+
+          for inst in $instances; do
+            cp -r "${DATA_DIR}/$inst" "temp_dataset/$inst"
+          done
+          ls -l temp_dataset/
+
+      - name: Run Experiment
+        run: |
+          if [ -z "$(ls -A temp_dataset 2>/dev/null)" ]; then
+            echo "Không có dữ liệu, bỏ qua."; exit 0
+          fi
+          python python_src/main.py temp_dataset
+        env:
+          SEED:                 42
+          SCENARIO_TRAIN_RATIO: "0.05"
+          LOG_MAIN:             result_dyn${{ matrix.dyn }}_${{ matrix.shard }}.log
+          LOG_HEU:              result_dyn${{ matrix.dyn }}_${{ matrix.shard }}.log
+          LOG_GP:               result_dyn${{ matrix.dyn }}_${{ matrix.shard }}.log
+          LOG_LASTPOP:          result_dyn${{ matrix.dyn }}_${{ matrix.shard }}.log
+          LOG_LASTROUTE:        result_dyn${{ matrix.dyn }}_${{ matrix.shard }}.log
+
+      - name: Upload Partial Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-dyn${{ matrix.dyn }}-shard-${{ matrix.shard }}
+          path: result_dyn${{ matrix.dyn }}_${{ matrix.shard }}.log
+
+  aggregate:
+    needs: run-experiments
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dyn: [10, 30, 50, 70]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Download partial results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: results-dyn${{ matrix.dyn }}-shard-*
+          merge-multiple: true
+
+      - name: Merge Logs and Aggregate
+        run: |
+          cat result_dyn${{ matrix.dyn }}_*.log > result_dyn${{ matrix.dyn }}.log
+          python aggregate_results.py result_dyn${{ matrix.dyn }}.log summary_h200_dyn${{ matrix.dyn }}.csv
+
+      - name: Upload Final Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-results-200-dyn${{ matrix.dyn }}
+          path: |
+            result_dyn${{ matrix.dyn }}.log
+            summary_h200_dyn${{ matrix.dyn }}.csv

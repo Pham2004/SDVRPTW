@@ -1,0 +1,95 @@
+name: ACO Experiment 100 Dyn (Parallel)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/aco_dyn_100.yml'
+
+jobs:
+  run-experiments:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dyn:   [10, 30, 50, 70]
+        shard: [0, 1, 2, 3, 4, 5]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare Subset Dataset (dyn=${{ matrix.dyn }} shard=${{ matrix.shard }})
+        run: |
+          mkdir -p temp_dataset
+          DATA_DIR="datasets/h100_dyn${{ matrix.dyn }}"
+          instances=$(ls -d ${DATA_DIR}/*/ | awk -F'/' '{print $(NF-1)}' | awk -v shard=${{ matrix.shard }} 'NR%6==shard')
+
+          if [ -z "$instances" ]; then
+            echo "Shard ${{ matrix.shard }} (dyn=${{ matrix.dyn }}) không có instance, bỏ qua."
+            exit 0
+          fi
+
+          for inst in $instances; do
+            cp -r "${DATA_DIR}/$inst" "temp_dataset/$inst"
+          done
+          ls -l temp_dataset/
+
+      - name: Run ACO Experiment
+        run: |
+          if [ -z "$(ls -A temp_dataset 2>/dev/null)" ]; then
+            echo "Không có dữ liệu, bỏ qua."; exit 0
+          fi
+          python python_src/aco_dvrptw.py temp_dataset
+        env:
+          SEED:    42
+          LOG_ACO: aco_result_dyn${{ matrix.dyn }}_${{ matrix.shard }}.log
+
+      - name: Upload Partial Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: aco-results-dyn${{ matrix.dyn }}-shard-${{ matrix.shard }}
+          path: aco_result_dyn${{ matrix.dyn }}_${{ matrix.shard }}.log
+
+  aggregate:
+    needs: run-experiments
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dyn: [10, 30, 50, 70]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Download partial results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: aco-results-dyn${{ matrix.dyn }}-shard-*
+          merge-multiple: true
+
+      - name: Merge Logs and Aggregate
+        run: |
+          cat aco_result_dyn${{ matrix.dyn }}_*.log > aco_result_dyn${{ matrix.dyn }}.log
+          python aggregate_aco_results.py aco_result_dyn${{ matrix.dyn }}.log summary_aco_h100_dyn${{ matrix.dyn }}.csv
+
+      - name: Upload Final Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: aco-final-results-100-dyn${{ matrix.dyn }}
+          path: |
+            aco_result_dyn${{ matrix.dyn }}.log
+            summary_aco_h100_dyn${{ matrix.dyn }}.csv
