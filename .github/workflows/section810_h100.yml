@@ -1,0 +1,117 @@
+name: Section 8.10 — h100 (GP only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      s_range:
+        description: 'Range of |S| to run'
+        type: choice
+        required: true
+        default: '1-8'
+        options:
+          - '1-8'
+          - '9-16'
+          - '17-24'
+          - '25-32'
+      seed:
+        description: 'GP random seed'
+        type: string
+        required: true
+        default: '42'
+
+env:
+  DATASET: h100_new
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      s_list: ${{ steps.set.outputs.s_list }}
+      tag: ${{ steps.set.outputs.tag }}
+    steps:
+      - id: set
+        run: |
+          case "${{ inputs.s_range }}" in
+            1-8)   echo 's_list=[1,2,3,4,5,6,7,8]'           >> "$GITHUB_OUTPUT" ;;
+            9-16)  echo 's_list=[9,10,11,12,13,14,15,16]'    >> "$GITHUB_OUTPUT" ;;
+            17-24) echo 's_list=[17,18,19,20,21,22,23,24]'   >> "$GITHUB_OUTPUT" ;;
+            25-32) echo 's_list=[25,26,27,28,29,30,31,32]'   >> "$GITHUB_OUTPUT" ;;
+            *) echo "bad s_range"; exit 1 ;;
+          esac
+          echo "tag=${{ inputs.s_range }}" >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 30
+      matrix:
+        instance: [h100c101, h100c201, h100r101, h100r201, h100rc101, h100rc201]
+        s: ${{ fromJSON(needs.plan.outputs.s_list) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Stage instance
+        run: |
+          mkdir -p temp_dataset
+          cp -r "datasets/${DATASET}/${{ matrix.instance }}" "temp_dataset/${{ matrix.instance }}"
+          ls -l temp_dataset/${{ matrix.instance }}
+
+      - name: Run GP (instance=${{ matrix.instance }}, |S|=${{ matrix.s }}, seed=${{ inputs.seed }})
+        run: |
+          python python_src/main.py temp_dataset 1 ${{ matrix.s }}
+        env:
+          SEED: ${{ inputs.seed }}
+          SCENARIO_TRAIN_RATIO: "0.05"
+          LOG_MAIN:      result_${{ matrix.instance }}_S${{ matrix.s }}.log
+          LOG_GP:        result_${{ matrix.instance }}_S${{ matrix.s }}.log
+          LOG_LASTPOP:   result_${{ matrix.instance }}_S${{ matrix.s }}.log
+          LOG_LASTROUTE: result_${{ matrix.instance }}_S${{ matrix.s }}.log
+
+      - name: Upload partial log
+        uses: actions/upload-artifact@v4
+        with:
+          name: section810-h100-seed${{ inputs.seed }}-${{ matrix.instance }}-S${{ matrix.s }}
+          path: result_${{ matrix.instance }}_S${{ matrix.s }}.log
+
+  aggregate:
+    needs: [plan, run]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Download partial logs (this shard, this seed)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: section810-h100-seed${{ inputs.seed }}-*
+          merge-multiple: true
+          path: logs
+
+      - name: Aggregate
+        run: |
+          python aggregate_section810.py logs summary_section810_h100_seed${{ inputs.seed }}_S${{ needs.plan.outputs.tag }}.csv
+
+      - name: Upload aggregate
+        uses: actions/upload-artifact@v4
+        with:
+          name: section810-h100-seed${{ inputs.seed }}-S${{ needs.plan.outputs.tag }}-summary
+          path: |
+            summary_section810_h100_seed${{ inputs.seed }}_S${{ needs.plan.outputs.tag }}.csv
+            logs/
