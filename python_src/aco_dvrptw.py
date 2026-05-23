@@ -35,6 +35,7 @@ Usage
 
 import os
 import sys
+import csv
 import copy
 import json
 import random
@@ -655,20 +656,6 @@ def main() -> None:
         print(f"[ERROR] Không tìm thấy thư mục: '{target}'")
         sys.exit(1)
 
-    _target_str   = target.replace("\\", "/")
-    _dataset_size = next(
-        (s for s in (400, 200, 100) if str(s) in _target_str.split("/")),
-        None
-    )
-    if _dataset_size is None:
-        print("[WARNING] Không nhận diện được kích thước bộ dữ liệu. "
-              "Dùng mặc định: num_trucks=10, truck_capacity=200")
-        NUM_TRUCKS, TRUCK_CAPACITY = 10, 200.0
-    else:
-        NUM_TRUCKS, TRUCK_CAPACITY = _DATASET_CFG[_dataset_size]
-        print(f"Bộ dữ liệu {_dataset_size}: "
-              f"num_trucks={NUM_TRUCKS}, truck_capacity={TRUCK_CAPACITY}")
-
     TRUCK_SPEED = 1.0
 
     # ── Seed (giống main.py: đọc từ env var SEED) ───────────────────
@@ -690,6 +677,25 @@ def main() -> None:
     NUM_ANTS        = 50
     ALPHA, BETA, RHO, Q = 1.0, 2.0, 0.6, 0.005
 
+    instances = discover_instances(target, max_instances, max_scenarios)
+    if not instances:
+        print(f"Không tìm thấy instance nào trong '{target}'")
+        sys.exit(1)
+
+    # ── Suy ra num_trucks / truck_capacity từ dữ liệu thật ──────────
+    # Đọc scenario csv đầu tiên, đếm số customer (= số dòng dữ liệu - depot).
+    _first_csv = next(iter(instances.values()))[0]
+    with open(_first_csv, newline='') as _fh:
+        _n_rows = sum(1 for _r in csv.reader(_fh) if _r and any(c.strip() for c in _r))
+    _n_customers = max(_n_rows - 2, 0)  # trừ header + depot
+
+    # Chọn config gần nhất theo số customer
+    _dataset_size = min(_DATASET_CFG.keys(),
+                       key=lambda s: abs(s - _n_customers))
+    NUM_TRUCKS, TRUCK_CAPACITY = _DATASET_CFG[_dataset_size]
+    print(f"Phát hiện {_n_customers} customers → dùng config bộ {_dataset_size}: "
+          f"num_trucks={NUM_TRUCKS}, truck_capacity={TRUCK_CAPACITY}")
+
     print("=" * 65)
     print(" Dynamic ACO for DVRPTW  (real-time dispatch, vehicle-only)")
     print("=" * 65)
@@ -701,11 +707,6 @@ def main() -> None:
           f"speed={TRUCK_SPEED}")
     print(f" ACO params     : α={ALPHA} β={BETA} ρ={RHO} q={Q}")
     print("=" * 65)
-
-    instances = discover_instances(target, max_instances, max_scenarios)
-    if not instances:
-        print(f"Không tìm thấy instance nào trong '{target}'")
-        sys.exit(1)
     print(f"\nTìm thấy {len(instances)} instance(s) sẽ chạy.")
 
     all_results: Dict = {}

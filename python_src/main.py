@@ -45,6 +45,7 @@ Dataset structure (sau khi reorganize):
 import os
 import sys
 import re
+import csv
 import glob
 import math
 import random
@@ -409,31 +410,27 @@ def main():
         print(f"[ERROR] Không tìm thấy thư mục: '{target}'")
         sys.exit(1)
 
-    # ── Xác định num_trucks và truck_capacity theo kích thước bộ dữ liệu ──
-    _DATASET_CFG = {
-        100: (10,  200),
-        200: (50,  400),
-        400: (100, 800),
-    }
-    _target_str = target.replace("\\", "/")
-    _dataset_size = next(
-        (s for s in (400, 200, 100) if str(s) in _target_str.split("/")),
-        None
-    )
-    if _dataset_size is None:
-        print("[WARNING] Không nhận diện được kích thước bộ dữ liệu từ đường dẫn. "
-              "Dùng mặc định: num_trucks=10, truck_capacity=200")
-        _num_trucks, _truck_capacity = 10, 200
-    else:
-        _num_trucks, _truck_capacity = _DATASET_CFG[_dataset_size]
-        print(f"Bộ dữ liệu {_dataset_size}: num_trucks={_num_trucks}, truck_capacity={_truck_capacity}")
-
     # ── Discover instances ─────────────────────────────────────────────────
     instances = discover_instances(target, max_instances, max_scenarios)
 
     if not instances:
         print(f"Không tìm thấy instance nào trong '{target}'")
         sys.exit(1)
+
+    # ── Suy ra num_trucks / truck_capacity từ dữ liệu thật ────────────────
+    _DATASET_CFG = {
+        100: (10,  200),
+        200: (50,  400),
+        400: (100, 800),
+    }
+    _first_csv = next(iter(instances.values()))[0]
+    with open(_first_csv, newline='') as _fh:
+        _n_rows = sum(1 for _r in csv.reader(_fh) if _r and any(c.strip() for c in _r))
+    _n_customers = max(_n_rows - 2, 0)  # trừ header + depot
+    _dataset_size = min(_DATASET_CFG.keys(), key=lambda s: abs(s - _n_customers))
+    _num_trucks, _truck_capacity = _DATASET_CFG[_dataset_size]
+    print(f"Phát hiện {_n_customers} customers → dùng config bộ {_dataset_size}: "
+          f"num_trucks={_num_trucks}, truck_capacity={_truck_capacity}")
 
     print(f"Tìm thấy {len(instances)} instance(s) sẽ chạy.")
     log_mod.log(MAIN, "start",
