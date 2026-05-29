@@ -97,6 +97,10 @@ NUM_TIME_SLOT        = float(os.environ.get("NUM_TIME_SLOT",        "20.0"))
 NUM_GEN              = int(os.environ.get("NUM_GEN",                "100"))
 POP_SIZE             = int(os.environ.get("POP_SIZE",               "100"))
 MAX_DEPTH            = int(os.environ.get("MAX_DEPTH",              "6"))
+# Per-tree max depth. Default to MAX_DEPTH so existing experiments behave
+# identically; set independently for the tree-depth grid experiment.
+MAX_DEPTH_ROUTING    = int(os.environ.get("MAX_DEPTH_ROUTING",    str(MAX_DEPTH)))
+MAX_DEPTH_SEQUENCING = int(os.environ.get("MAX_DEPTH_SEQUENCING", str(MAX_DEPTH)))
 CROSSOVER_RATE       = float(os.environ.get("CROSSOVER_RATE",       "0.8"))
 MUTATION_RATE        = float(os.environ.get("MUTATION_RATE",        "0.15"))
 TRAIN_FACTOR         = float(os.environ.get("TRAIN_FACTOR",         "2.0"))
@@ -165,24 +169,24 @@ class Individual:
         self.result     = None
 
     @staticmethod
-    def ramp_half_and_half(gpc: gp_mod.GPContext):
+    def ramp_half_and_half(gpc_r: gp_mod.GPContext, gpc_s: gp_mod.GPContext):
         try:
             r_ctx = sim_ctx.RoutingContext
             s_ctx = sim_ctx.SequencingContext
         except Exception:
             r_ctx = None
             s_ctx = None
-        r_pop = gpc.ramp_half_and_half(context=r_ctx)
-        s_pop = gpc.ramp_half_and_half(context=s_ctx)
+        r_pop = gpc_r.ramp_half_and_half(context=r_ctx)
+        s_pop = gpc_s.ramp_half_and_half(context=s_ctx)
         return [Individual(r, s) for r, s in zip(r_pop, s_pop)]
 
-    def crossover_with(self, gpc, other):
-        r1, r2 = gpc.crossover(self.routing,    other.routing)
-        s1, s2 = gpc.crossover(self.sequencing, other.sequencing)
+    def crossover_with(self, gpc_r, gpc_s, other):
+        r1, r2 = gpc_r.crossover(self.routing,    other.routing)
+        s1, s2 = gpc_s.crossover(self.sequencing, other.sequencing)
         return Individual(r1, s1), Individual(r2, s2)
 
-    def mutate(self, gpc):
-        return Individual(gpc.mutation(self.routing), gpc.mutation(self.sequencing))
+    def mutate(self, gpc_r, gpc_s):
+        return Individual(gpc_r.mutation(self.routing), gpc_s.mutation(self.sequencing))
 
     def evaluate(self, cache, problem_set: ProblemSet, train_time_slots: List[float]):
         if self.result is not None:
@@ -232,17 +236,21 @@ def gp(problem_set: ProblemSet):
             pass
 
     rng = random.Random(seed_val) if seed_val is not None else random.Random()
-    gpc = gp_mod.GPContext(rng=rng, num_population=POP_SIZE, max_depth=MAX_DEPTH)
+    # Separate contexts so the routing and sequencing trees can use different
+    # max depths; both share the same rng. When MAX_DEPTH_ROUTING ==
+    # MAX_DEPTH_SEQUENCING == MAX_DEPTH this matches the single-context setup.
+    gpc_r = gp_mod.GPContext(rng=rng, num_population=POP_SIZE, max_depth=MAX_DEPTH_ROUTING)
+    gpc_s = gp_mod.GPContext(rng=rng, num_population=POP_SIZE, max_depth=MAX_DEPTH_SEQUENCING)
 
     cache: dict = {}
-    pop: List[Individual] = Individual.ramp_half_and_half(gpc)
+    pop: List[Individual] = Individual.ramp_half_and_half(gpc_r, gpc_s)
 
     for gen in range(1, NUM_GEN + 1):
         for ind in pop:
             ind.evaluate(cache, training_problem_set, train_time_slots)
 
         pop.sort(key=lambda i: i.result[2])
-        pop    = pop[:gpc.num_population]
+        pop    = pop[:gpc_r.num_population]
         result = pop[0].result
 
         log_mod.log(GP, "new_gen",
@@ -283,16 +291,16 @@ def gp(problem_set: ProblemSet):
                             sequencing=str(ind.sequencing))
 
         new_pop = list(pop)
-        half    = gpc.num_population // 2
+        half    = gpc_r.num_population // 2
         for _ in range(half):
-            p1 = select_parent(gpc, pop)
-            p2 = select_parent(gpc, pop)
+            p1 = select_parent(gpc_r, pop)
+            p2 = select_parent(gpc_r, pop)
             x  = random.random()
             if x <= CROSSOVER_RATE:
-                c1, c2 = pop[p1].crossover_with(gpc, pop[p2])
+                c1, c2 = pop[p1].crossover_with(gpc_r, gpc_s, pop[p2])
                 new_pop.extend([c1, c2])
             elif x <= CROSSOVER_RATE + MUTATION_RATE:
-                new_pop.extend([pop[p1].mutate(gpc), pop[p2].mutate(gpc)])
+                new_pop.extend([pop[p1].mutate(gpc_r, gpc_s), pop[p2].mutate(gpc_r, gpc_s)])
             else:
                 new_pop.append(pop[p1])
                 new_pop.append(pop[p2])
