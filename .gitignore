@@ -12,3 +12,4 @@
 # Always keep .gitignore itself
 !.gitignore
 !aggregate_section810.py
+!aggregate_section_depth.py
