@@ -1,0 +1,4 @@
+python-dotenv
+pandas
+torch
+numpy

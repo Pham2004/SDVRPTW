@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+rl_checkpoints/
+datasets/rl_results*.json
+datasets/rl_smoke*.json
