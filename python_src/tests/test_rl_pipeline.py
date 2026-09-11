@@ -18,6 +18,13 @@ except ImportError:
 
 @unittest.skipIf(torch is None, "PyTorch is not installed")
 class RLPipelineTests(unittest.TestCase):
+    def test_vehicle_mapping_supports_all_benchmark_sizes(self):
+        from rl.data import infer_vehicle_config
+
+        self.assertEqual(infer_vehicle_config(100), (10, 200.0))
+        self.assertEqual(infer_vehicle_config(200), (50, 400.0))
+        self.assertEqual(infer_vehicle_config(400), (100, 800.0))
+
     def test_generated_dataset_roundtrip_keeps_sdvrptw_fields(self):
         from rl.data import (
             NODE_FEATURES,

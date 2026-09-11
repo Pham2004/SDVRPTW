@@ -33,7 +33,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("target_path")
     parser.add_argument("num_instances", nargs="?", type=int, default=None)
     parser.add_argument("num_scenarios", nargs="?", type=int, default=16)
+    parser.add_argument("--max-instances", type=int, default=None)
+    parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--output", default="datasets/rl_checkpoint_results.json")
+    parser.add_argument("--summary-csv", default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--quiet", action="store_true")
     return parser
@@ -50,6 +53,16 @@ def _customer_count(csv_path: str) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    max_instances = (
+        args.max_instances
+        if args.max_instances is not None
+        else args.num_instances
+    )
+    max_scenarios = (
+        args.max_scenarios
+        if args.max_scenarios is not None
+        else args.num_scenarios
+    )
     checkpoint = torch.load(
         args.checkpoint, map_location="cpu", weights_only=False
     )
@@ -59,7 +72,7 @@ def main(argv=None) -> int:
         raise SystemExit("checkpoint contains invalid num_time_slots")
     agent = PPOAgent.from_checkpoint(args.checkpoint, device=args.device)
     instances = discover_instances(
-        args.target_path, args.num_instances, args.num_scenarios
+        args.target_path, max_instances, max_scenarios
     )
     if not instances:
         raise SystemExit(f"No CSV instances found in {args.target_path}")
@@ -73,7 +86,7 @@ def main(argv=None) -> int:
     )
     print(
         f"dataset={os.path.abspath(args.target_path)} "
-        f"instances={len(instances)} scenarios<={args.num_scenarios}"
+        f"instances={len(instances)} scenarios<={max_scenarios}"
     )
 
     started = time.time()
@@ -123,6 +136,8 @@ def main(argv=None) -> int:
             "avg_fitness": sum(row["fitness"] for row in rows) / len(rows),
             "avg_distance": sum(row["distance"] for row in rows) / len(rows),
             "avg_profit": sum(row["profit"] for row in rows) / len(rows),
+            "avg_served": sum(row["served"] for row in rows) / len(rows),
+            "avg_dropped": sum(row["dropped"] for row in rows) / len(rows),
             "scenario_results": rows,
         }
         all_results[instance_name] = summary
@@ -134,6 +149,35 @@ def main(argv=None) -> int:
             )
 
     elapsed = time.time() - started
+    scenario_rows = [
+        row
+        for instance in all_results.values()
+        for row in instance["scenario_results"]
+    ]
+    total_customers = sum(
+        instance["customers"] * instance["scenario_count"]
+        for instance in all_results.values()
+    )
+    overall = {
+        "instance_count": len(all_results),
+        "scenario_count": len(scenario_rows),
+        "avg_fitness": sum(row["fitness"] for row in scenario_rows) / len(scenario_rows),
+        "macro_avg_fitness": sum(
+            instance["avg_fitness"] for instance in all_results.values()
+        ) / len(all_results),
+        "avg_distance": sum(row["distance"] for row in scenario_rows) / len(scenario_rows),
+        "avg_profit": sum(row["profit"] for row in scenario_rows) / len(scenario_rows),
+        "avg_served": sum(row["served"] for row in scenario_rows) / len(scenario_rows),
+        "avg_dropped": sum(row["dropped"] for row in scenario_rows) / len(scenario_rows),
+        "served_ratio": (
+            sum(row["served"] for row in scenario_rows) / total_customers
+            if total_customers else 0.0
+        ),
+        "dropped_ratio": (
+            sum(row["dropped"] for row in scenario_rows) / total_customers
+            if total_customers else 0.0
+        ),
+    }
     result = {
         "algorithm": checkpoint.get("algorithm", "masked_ppo"),
         "pipeline": checkpoint.get("pipeline"),
@@ -145,15 +189,43 @@ def main(argv=None) -> int:
         "training_simulator_rollouts": checkpoint.get("simulator_rollouts"),
         "report_simulator_rollouts": total_rollouts,
         "elapsed_s": elapsed,
+        "overall": overall,
         "instances": all_results,
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with open(output, "w", encoding="utf-8") as handle:
         json.dump(result, handle, indent=2, ensure_ascii=False)
+    if args.summary_csv:
+        summary_path = Path(args.summary_csv)
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        fields = [
+            "instance", "scenario_count", "avg_fitness", "avg_distance",
+            "avg_profit", "avg_served", "avg_dropped",
+        ]
+        with open(summary_path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            for instance_name, instance in all_results.items():
+                writer.writerow({
+                    "instance": instance_name,
+                    **{field: instance[field] for field in fields[1:]},
+                })
+            writer.writerow({
+                "instance": "OVERALL",
+                **{field: overall[field] for field in fields[1:]},
+            })
+        print(f"summary_csv={summary_path.resolve()}")
     print(
         f"results={output.resolve()} report_rollouts={total_rollouts} "
         f"elapsed={elapsed:.1f}s"
+    )
+    print(
+        f"OVERALL fitness={overall['avg_fitness']:.6f} "
+        f"distance={overall['avg_distance']:.3f} "
+        f"profit={overall['avg_profit']:.3f} "
+        f"served={overall['avg_served']:.2f} "
+        f"dropped={overall['avg_dropped']:.2f}"
     )
     return 0
 

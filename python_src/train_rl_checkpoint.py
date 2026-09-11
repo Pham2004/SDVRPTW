@@ -17,7 +17,7 @@ for path in (HERE, REPO_ROOT):
 import torch
 
 from main import NUM_GEN, NUM_TIME_SLOT, POP_SIZE, WEIGHT
-from rl.data import fitness_value, load_dataset, problems_from_dataset
+from rl.data import TensorProblemDataset, fitness_value, load_dataset
 from rl.ppo import PPOConfig, PPOTrainer
 
 
@@ -60,8 +60,8 @@ def main(argv=None) -> int:
         raise SystemExit("--num-time-slots must be positive")
 
     dataset = load_dataset(args.dataset)
-    problems = problems_from_dataset(dataset)
-    time_slots = [problem.depot.close / args.num_time_slots for problem in problems]
+    problems = TensorProblemDataset(dataset)
+    time_slots = problems.time_slots(args.num_time_slots)
     config = PPOConfig(
         hidden_dim=args.hidden_dim,
         learning_rate=args.learning_rate,

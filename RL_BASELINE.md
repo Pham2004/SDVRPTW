@@ -81,6 +81,35 @@ training, and checkpoint inference. It does **not** copy COAST's VECTRA model,
 remains this repository's masked PPO above, and every rollout still goes
 through the canonical SDVRPTW `Simulation` and distance/profit fitness.
 
+### One-command run for H100, H200, or H400
+
+```powershell
+# H100
+python python_src/run_rl_pipeline.py datasets/h100_new --device cuda
+
+# H200
+python python_src/run_rl_pipeline.py datasets/h200_new --device cuda
+
+# H400
+python python_src/run_rl_pipeline.py datasets/h400_new --device cuda
+```
+
+Each invocation generates its training dataset, trains exactly one global
+checkpoint, evaluates every discovered instance/scenario in the selected
+folder, and writes an isolated timestamped directory under `rl_runs/`. It
+contains `training_dataset.pt`, `checkpoint.pt`, detailed `results.json`,
+per-instance plus `OVERALL` `summary.csv`, and `run_manifest.json`.
+
+The generator automatically uses the repository fleet mapping: H100 uses
+10 trucks/capacity 200, H200 uses 50/400, and H400 uses 100/800. Defaults are
+10,000 generated samples, 10,000 training simulator evaluations, seed 42, and
+at most 16 scenarios per instance. All can be overridden, for example:
+
+```powershell
+python python_src/run_rl_pipeline.py datasets/h400_new --device cuda:0 `
+  --samples 20000 --max-evaluations 10000 --seed 43
+```
+
 ### 1. Generate a training dataset once
 
 ```powershell

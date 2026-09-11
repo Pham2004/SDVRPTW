@@ -11,7 +11,7 @@ import glob
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -250,15 +250,34 @@ def load_dataset(dataset_path: str) -> Dict[str, object]:
     return dataset
 
 
-def problems_from_dataset(dataset: Dict[str, object]) -> List[Problem]:
-    config = dataset["vehicle_config"]
-    problems = []
-    for instance in dataset["nodes"]:
-        rows = instance.tolist()
+class TensorProblemDataset(Sequence[Problem]):
+    """Lazily materialize canonical Problems from a tensor artifact.
 
-        def request(row: Sequence[float], idx: int) -> Request:
+    H400 with 10,000 generated instances contains four million requests.
+    Keeping those as a tensor and constructing only the sampled instance makes
+    global training practical without changing the simulator or PPO rollout.
+    """
+
+    def __init__(self, dataset: Dict[str, object]):
+        self.dataset = dataset
+        self.nodes = dataset["nodes"]
+        self.config = dataset["vehicle_config"]
+
+    def __len__(self) -> int:
+        return int(self.nodes.shape[0])
+
+    def __getitem__(self, index: Union[int, slice]):
+        if isinstance(index, slice):
+            return [self[item] for item in range(*index.indices(len(self)))]
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        rows = self.nodes[index].tolist()
+
+        def request(row: Sequence[float], request_idx: int) -> Request:
             return Request(
-                idx=idx,
+                idx=request_idx,
                 x=float(row[0]),
                 y=float(row[1]),
                 demand=float(row[2]),
@@ -271,20 +290,36 @@ def problems_from_dataset(dataset: Dict[str, object]) -> List[Problem]:
             )
 
         depot = request(rows[0], 0)
-        customers = [request(row, idx) for idx, row in enumerate(rows[1:], 1)]
-        problems.append(Problem(
+        customers = [
+            request(row, request_idx)
+            for request_idx, row in enumerate(rows[1:], 1)
+        ]
+        return Problem(
             depot=depot,
             requests=customers,
-            truck_speed=float(config["truck_speed"]),
-            truck_capacity=float(config["truck_capacity"]),
-            num_trucks=int(config["num_trucks"]),
-        ))
-    return problems
+            truck_speed=float(self.config["truck_speed"]),
+            truck_capacity=float(self.config["truck_capacity"]),
+            num_trucks=int(self.config["num_trucks"]),
+        )
+
+    def time_slots(self, num_time_slots: float) -> List[float]:
+        if num_time_slots <= 0:
+            raise ValueError("num_time_slots must be positive")
+        return [
+            float(horizon) / num_time_slots
+            for horizon in self.nodes[:, 0, 4].tolist()
+        ]
+
+
+def problems_from_dataset(dataset: Dict[str, object]) -> List[Problem]:
+    """Materialize every Problem; intended for small tests and utilities."""
+    return list(TensorProblemDataset(dataset))
 
 
 __all__ = [
     "DATASET_FORMAT",
     "NODE_FEATURES",
+    "TensorProblemDataset",
     "VEHICLE_CONFIGS",
     "discover_csvs",
     "fitness_value",

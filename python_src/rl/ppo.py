@@ -163,8 +163,10 @@ class PPOTrainer:
             raise ValueError("one time slot is required per training problem")
         if max_evaluations <= 0:
             raise ValueError("max_evaluations must be positive")
-        self.training_problems = list(training_problems)
-        self.training_time_slots = list(training_time_slots)
+        # Keep indexable datasets lazy. This avoids materializing millions of
+        # Request objects for generated H200/H400 tensors.
+        self.training_problems = training_problems
+        self.training_time_slots = training_time_slots
         self.fitness_fn = fitness_fn
         self.max_evaluations = int(max_evaluations)
         self.config = config or PPOConfig()
@@ -202,10 +204,16 @@ class PPOTrainer:
     def _objective_evaluation(self):
         trajectories = []
         fits = []
-        pairs = list(zip(self.training_problems, self.training_time_slots))
         if self.problems_per_evaluation is not None:
-            pairs = random.sample(pairs, self.problems_per_evaluation)
-        for problem, time_slot in pairs:
+            indices = random.sample(
+                range(len(self.training_problems)),
+                self.problems_per_evaluation,
+            )
+        else:
+            indices = range(len(self.training_problems))
+        for index in indices:
+            problem = self.training_problems[index]
+            time_slot = self.training_time_slots[index]
             steps, _distance, _profit, fit, _routes, _dropped = self._rollout(
                 problem, time_slot, deterministic=False
             )
