@@ -146,47 +146,6 @@ class PolicySimulation(Simulation):
 
     def routing_rule_route_request(self, problem, time: float,
                                    vehicles: List[VehicleState], request):
-        candidate_vehicle_ids = []
-        candidate_features = []
-        for vehicle_id, state in enumerate(vehicles):
-            earliest_departure = max(time, state.busy_until)
-            travel_time = state.distance_to(request) / problem.truck_speed
-            if earliest_departure + travel_time <= request.close:
-                candidate_vehicle_ids.append(vehicle_id)
-                candidate_features.append(
-                    self._features(state, request, time, is_sequencing=False)
-                )
-        if not candidate_vehicle_ids:
-            return None
-        local_action = self._choose("routing", candidate_features)
-        return candidate_vehicle_ids[local_action]
-
-    def sequencing_rule_sequence_request(self, problem, time: float,
-                                          vehicle_state: VehicleState, cache):
-        if not vehicle_state.queue:
-            return None
-        features = [
-            self._features(vehicle_state, request, time, is_sequencing=True)
-            for request, _ready_time in vehicle_state.queue
-        ]
-        return self._choose("sequencing", features)
-
-    def route_vehicle_to(self, vehicle: int, request, _cb,
-                         total_distance_container,
-                         total_profit_container=None) -> None:
-        state = self.vehicles[vehicle]
-        distance = state.distance_to(request)
-        profit = 0.0 if getattr(request, "idx", 0) == 0 else float(
-            getattr(request, "profit", 0.0)
-        )
-        super().route_vehicle_to(
-            vehicle, request, _cb, total_distance_container,
-            total_profit_container,
-        )
-        self._add_reward(distance, profit)
-
-    def routing_rule_route_request(self, problem, time: float,
-                                   vehicles: List[VehicleState], request):
         candidates = []
         feature_rows = []
         for vehicle_idx, state in enumerate(vehicles):

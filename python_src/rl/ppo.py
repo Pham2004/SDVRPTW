@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import random
 from dataclasses import asdict, dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -114,14 +115,33 @@ class PPOAgent:
         actions_t = torch.as_tensor(actions, dtype=torch.long, device=self.device)
         return dist.log_prob(actions_t), dist.entropy(), values
 
+    @classmethod
+    def from_checkpoint(cls, checkpoint_path: str,
+                        device: Optional[str] = None) -> "PPOAgent":
+        """Restore an inference-ready agent from a pipeline checkpoint."""
+        checkpoint = torch.load(
+            os.fspath(checkpoint_path), map_location="cpu", weights_only=False
+        )
+        expected_features = list(FEATURE_NAMES)
+        if checkpoint.get("feature_names") != expected_features:
+            raise ValueError(
+                "checkpoint feature schema does not match this code version"
+            )
+        config = PPOConfig(**checkpoint["config"])
+        agent = cls(config, device=device)
+        agent.model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+        agent.model.eval()
+        return agent
+
 
 class PPOTrainer:
     """Trains with a strict objective-evaluation budget.
 
-    One objective evaluation means evaluating one sampled policy on every
-    problem in ``training_problems`` and averaging the fitness, matching GP's
-    evaluation of one individual on its training ``ProblemSet``.  The raw
-    number of simulator calls is tracked separately as ``simulator_rollouts``.
+    By default one objective evaluation runs every ``training_problem`` and
+    averages fitness, matching GP's evaluation of an individual on its
+    training ``ProblemSet``.  ``problems_per_evaluation`` enables global
+    dataset sampling; setting it to one makes objective evaluations and raw
+    simulator rollouts identical.  Both counters are always recorded.
     """
 
     def __init__(
@@ -134,6 +154,8 @@ class PPOTrainer:
         weight: float = 0.5,
         seed: int = 0,
         device: Optional[str] = None,
+        problems_per_evaluation: Optional[int] = None,
+        restore_best: bool = True,
     ):
         if not training_problems:
             raise ValueError("training_problems must not be empty")
@@ -148,6 +170,13 @@ class PPOTrainer:
         self.config = config or PPOConfig()
         self.weight = float(weight)
         self.seed = int(seed)
+        if (problems_per_evaluation is not None
+                and not 1 <= problems_per_evaluation <= len(training_problems)):
+            raise ValueError(
+                "problems_per_evaluation must be between 1 and dataset size"
+            )
+        self.problems_per_evaluation = problems_per_evaluation
+        self.restore_best = bool(restore_best)
 
         random.seed(self.seed)
         torch.manual_seed(self.seed)
@@ -173,8 +202,10 @@ class PPOTrainer:
     def _objective_evaluation(self):
         trajectories = []
         fits = []
-        for problem, time_slot in zip(
-                self.training_problems, self.training_time_slots):
+        pairs = list(zip(self.training_problems, self.training_time_slots))
+        if self.problems_per_evaluation is not None:
+            pairs = random.sample(pairs, self.problems_per_evaluation)
+        for problem, time_slot in pairs:
             steps, _distance, _profit, fit, _routes, _dropped = self._rollout(
                 problem, time_slot, deterministic=False
             )
@@ -307,7 +338,8 @@ class PPOTrainer:
                     f"best={self.best_fitness:.5f}"
                 )
 
-        self.agent.model.load_state_dict(self.best_state_dict)
+        if self.restore_best:
+            self.agent.model.load_state_dict(self.best_state_dict)
         return self.history
 
     def evaluate(self, problems: Sequence, time_slots: Sequence[float]):
@@ -339,6 +371,8 @@ class PPOTrainer:
             "evaluation_count": self.evaluation_count,
             "simulator_rollouts": self.simulator_rollouts,
             "best_training_fitness": self.best_fitness,
+            "problems_per_evaluation": self.problems_per_evaluation,
+            "restore_best": self.restore_best,
             "model_state_dict": self.agent.model.state_dict(),
         }
 

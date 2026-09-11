@@ -1,5 +1,8 @@
 __pycache__/
 *.py[cod]
 rl_checkpoints/
+datasets/rl_train*.pt
 datasets/rl_results*.json
 datasets/rl_smoke*.json
+datasets/rl_checkpoint_results*.json
+.rl_pipeline_smoke/
