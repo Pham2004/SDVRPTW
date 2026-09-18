@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 1: generate a global SDVRPTW training dataset."""
+"""Stage 1: build an SDVRPTW training dataset."""
 from __future__ import annotations
 
 import argparse
@@ -10,17 +10,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from rl.data import generate_from_reference, save_dataset
+from rl.data import dataset_from_scenario, generate_from_reference, save_dataset
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate synthetic SDVRPTW Problems from the empirical schema of "
-            "a reference dataset. This does not run training."
+            "Build an exact one-scenario dataset from a CSV, or generate "
+            "synthetic problems from a reference folder."
         )
     )
-    parser.add_argument("reference_dir", help="folder containing reference CSVs")
+    parser.add_argument(
+        "reference",
+        help="one CSV scenario (exact mode) or a folder of reference CSVs",
+    )
     parser.add_argument("output", help="output .pt training dataset")
     parser.add_argument("--samples", type=int, default=10_000)
     parser.add_argument("--customers", type=int, default=None)
@@ -34,16 +37,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    dataset = generate_from_reference(
-        reference_dir=args.reference_dir,
-        sample_count=args.samples,
-        customer_count=args.customers,
-        seed=args.seed,
-        jitter=args.jitter,
-        truck_speed=args.truck_speed,
-        num_trucks=args.num_trucks,
-        truck_capacity=args.truck_capacity,
-    )
+    if os.path.isfile(args.reference):
+        if not args.reference.lower().endswith(".csv"):
+            raise SystemExit("a file reference must be a CSV scenario")
+        dataset = dataset_from_scenario(
+            scenario_path=args.reference,
+            truck_speed=args.truck_speed,
+            num_trucks=args.num_trucks,
+            truck_capacity=args.truck_capacity,
+        )
+    else:
+        dataset = generate_from_reference(
+            reference_dir=args.reference,
+            sample_count=args.samples,
+            customer_count=args.customers,
+            seed=args.seed,
+            jitter=args.jitter,
+            truck_speed=args.truck_speed,
+            num_trucks=args.num_trucks,
+            truck_capacity=args.truck_capacity,
+        )
     save_dataset(dataset, args.output)
     shape = tuple(dataset["nodes"].shape)
     config = dataset["vehicle_config"]

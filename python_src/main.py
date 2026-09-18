@@ -98,10 +98,11 @@ NUM_TIME_SLOT        = float(os.environ.get("NUM_TIME_SLOT",        "20.0"))
 NUM_GEN              = int(os.environ.get("NUM_GEN",                "100"))
 POP_SIZE             = int(os.environ.get("POP_SIZE",               "100"))
 MAX_DEPTH            = int(os.environ.get("MAX_DEPTH",              "6"))
-# Per-tree max depth. Default to MAX_DEPTH so existing experiments behave
-# identically; set independently for the tree-depth grid experiment.
-MAX_DEPTH_ROUTING    = int(os.environ.get("MAX_DEPTH_ROUTING",    str(MAX_DEPTH)))
-MAX_DEPTH_SEQUENCING = int(os.environ.get("MAX_DEPTH_SEQUENCING", str(MAX_DEPTH)))
+# The selected paper configuration uses a deeper routing tree than sequencing.
+# MAX_DEPTH remains available for legacy callers, while direct GP runs default
+# to the independently tuned (routing=8, sequencing=6) pair.
+MAX_DEPTH_ROUTING    = int(os.environ.get("MAX_DEPTH_ROUTING",       "8"))
+MAX_DEPTH_SEQUENCING = int(os.environ.get("MAX_DEPTH_SEQUENCING",    "6"))
 CROSSOVER_RATE       = float(os.environ.get("CROSSOVER_RATE",       "0.8"))
 MUTATION_RATE        = float(os.environ.get("MUTATION_RATE",        "0.15"))
 TRAIN_FACTOR         = float(os.environ.get("TRAIN_FACTOR",         "2.0"))
@@ -212,20 +213,39 @@ class Individual:
 
 
 def select_parent(gpc, pop):
-    idxs = random.sample(range(len(pop)), k=min(8, len(pop)))
-    best = max(idxs, key=lambda i: pop[i].result[2])
-    return best
+    """Select the lowest-fitness individual from a seeded tournament."""
+    idxs = gpc.rng.sample(range(len(pop)), k=min(8, len(pop)))
+    return min(idxs, key=lambda i: pop[i].result[2])
 
 
 # ── GP loop ────────────────────────────────────────────────────────────────────
-def gp(problem_set: ProblemSet):
+def gp(problem_set: ProblemSet, training_scenario_count: int = None,
+       evaluate_full_each_generation: bool = True,
+       return_details: bool = False,
+       clone_training_scenarios: bool = True):
     time_slots       = [prob.depot.close / NUM_TIME_SLOT for prob in problem_set]
-    train_time_slots = [t / STRESS_FACTOR for t in time_slots]
-    limit            = math.ceil(len(problem_set) * SCENARIO_TRAIN_RATIO)
-    training_problems = [
-        prob.clone_training(t_slot * TRAIN_FACTOR, STRESS_FACTOR)
-        for prob, t_slot in zip(problem_set[:limit], time_slots[:limit])
-    ]
+    if training_scenario_count is None:
+        limit = math.ceil(len(problem_set) * SCENARIO_TRAIN_RATIO)
+    else:
+        limit = int(training_scenario_count)
+        if not 1 <= limit <= len(problem_set):
+            raise ValueError(
+                "training_scenario_count must be between 1 and the number "
+                "of available scenarios"
+            )
+    if clone_training_scenarios:
+        training_problems = [
+            prob.clone_training(t_slot * TRAIN_FACTOR, STRESS_FACTOR)
+            for prob, t_slot in zip(problem_set[:limit], time_slots[:limit])
+        ]
+        train_time_slots = [
+            t / STRESS_FACTOR for t in time_slots[:limit]
+        ]
+        training_data_method = "legacy_clone_training"
+    else:
+        training_problems = list(problem_set[:limit])
+        train_time_slots = list(time_slots[:limit])
+        training_data_method = "exact_csv_scenarios"
     training_problem_set = ProblemSet(training_problems)
 
     seed_env = os.environ.get("SEED", "")
@@ -240,8 +260,14 @@ def gp(problem_set: ProblemSet):
     # Separate contexts so the routing and sequencing trees can use different
     # max depths; both share the same rng. When MAX_DEPTH_ROUTING ==
     # MAX_DEPTH_SEQUENCING == MAX_DEPTH this matches the single-context setup.
-    gpc_r = gp_mod.GPContext(rng=rng, num_population=POP_SIZE, max_depth=MAX_DEPTH_ROUTING)
-    gpc_s = gp_mod.GPContext(rng=rng, num_population=POP_SIZE, max_depth=MAX_DEPTH_SEQUENCING)
+    gpc_r = gp_mod.GPContext(
+        rng=rng, num_population=POP_SIZE,
+        max_depth=MAX_DEPTH_ROUTING, const_rate=CONST_RATE,
+    )
+    gpc_s = gp_mod.GPContext(
+        rng=rng, num_population=POP_SIZE,
+        max_depth=MAX_DEPTH_SEQUENCING, const_rate=CONST_RATE,
+    )
 
     cache: dict = {}
     pop: List[Individual] = Individual.ramp_half_and_half(gpc_r, gpc_s)
@@ -258,17 +284,26 @@ def gp(problem_set: ProblemSet):
                     gen=gen, result=(result[0], result[1]), fitness=result[2],
                     routing=str(pop[0].routing), sequencing=str(pop[0].sequencing))
 
-        full_results = []
-        for prob, t_slot in zip(problem_set, time_slots):
-            sim_best = sim_mod.Simulation(prob, pop[0].routing, pop[0].sequencing)
-            dist, profit = sim_best.simulate_until(t_slot, float("inf"))
-            full_results.append((dist, profit))
+        if evaluate_full_each_generation:
+            full_results = []
+            for prob, t_slot in zip(problem_set, time_slots):
+                sim_best = sim_mod.Simulation(
+                    prob, pop[0].routing, pop[0].sequencing
+                )
+                dist, profit = sim_best.simulate_until(t_slot, float("inf"))
+                full_results.append((dist, profit))
 
-        avg_fit    = problem_set.update_fitness(full_results, fitness)
-        avg_dist   = sum(r[0] for r in full_results) / len(full_results) if full_results else 0.0
-        avg_profit = sum(r[1] for r in full_results) / len(full_results) if full_results else 0.0
-        log_mod.log(GP, "full_result",
-                    result=(avg_dist, avg_profit), fitness=avg_fit)
+            avg_fit = problem_set.update_fitness(full_results, fitness)
+            avg_dist = (
+                sum(r[0] for r in full_results) / len(full_results)
+                if full_results else 0.0
+            )
+            avg_profit = (
+                sum(r[1] for r in full_results) / len(full_results)
+                if full_results else 0.0
+            )
+            log_mod.log(GP, "full_result",
+                        result=(avg_dist, avg_profit), fitness=avg_fit)
 
         try:
             log_mod.log(GP, "base64",
@@ -297,12 +332,24 @@ def gp(problem_set: ProblemSet):
                             routing=str(ind.routing),
                             sequencing=str(ind.sequencing))
 
+        if gen == NUM_GEN:
+            details = {
+                "best": pop[0],
+                "objective_evaluations": len(cache),
+                "training_scenarios": len(training_problem_set),
+                "training_data_method": training_data_method,
+                "training_simulator_rollouts": (
+                    len(cache) * len(training_problem_set)
+                ),
+            }
+            return details if return_details else pop[0]
+
         new_pop = list(pop)
         half    = gpc_r.num_population // 2
         for _ in range(half):
             p1 = select_parent(gpc_r, pop)
             p2 = select_parent(gpc_r, pop)
-            x  = random.random()
+            x  = gpc_r.rng.random()
             if x <= CROSSOVER_RATE:
                 c1, c2 = pop[p1].crossover_with(gpc_r, gpc_s, pop[p2])
                 new_pop.extend([c1, c2])

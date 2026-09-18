@@ -10,10 +10,29 @@ for path in (PYTHON_SRC, REPO_ROOT):
         sys.path.insert(0, path)
 
 from gp.mod import GPContext
+from main import select_parent
+from run_gp_pipeline import _resolved_depths
 from sim.ctx import RoutingContext, SequencingContext
 
 
 class GPOperatorTests(unittest.TestCase):
+    def test_pipeline_defaults_to_distinct_tree_depths(self):
+        class Args:
+            max_depth = None
+            routing_depth = None
+            sequencing_depth = None
+
+        self.assertEqual(_resolved_depths(Args()), (8, 6))
+
+    def test_tournament_selection_minimizes_fitness(self):
+        class Individual:
+            def __init__(self, fitness):
+                self.result = (0.0, 0.0, fitness)
+
+        gpc = GPContext(random.Random(123), num_population=8, max_depth=2)
+        population = [Individual(float(i)) for i in range(8)]
+        self.assertEqual(select_parent(gpc, population), 0)
+
     def test_generation_crossover_and_mutation_preserve_tree_invariants(self):
         for context in (RoutingContext, SequencingContext):
             gpc = GPContext(random.Random(123), num_population=20, max_depth=6)

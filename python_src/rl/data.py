@@ -1,4 +1,4 @@
-"""Synthetic SDVRPTW dataset format used by the global RL pipeline.
+"""Tensor SDVRPTW dataset format used by the RL pipelines.
 
 The generated artifact deliberately stores the repository's complete CSV
 schema.  Training still runs through :class:`sim.mod.Simulation`; this module
@@ -230,6 +230,51 @@ def generate_from_reference(
     }
 
 
+def dataset_from_scenario(
+    scenario_path: str,
+    truck_speed: float = 1.0,
+    num_trucks: Optional[int] = None,
+    truck_capacity: Optional[float] = None,
+) -> Dict[str, object]:
+    """Create a one-problem training dataset from one exact CSV scenario."""
+    path = Path(scenario_path).resolve()
+    if not path.is_file():
+        raise ValueError(f"training scenario not found: {path}")
+
+    profile = _read_profile(str(path))
+    customer_count = len(profile["customers"])
+    inferred_trucks, inferred_capacity = infer_vehicle_config(customer_count)
+    num_trucks = inferred_trucks if num_trucks is None else int(num_trucks)
+    truck_capacity = (
+        inferred_capacity if truck_capacity is None else float(truck_capacity)
+    )
+    if num_trucks <= 0 or truck_capacity <= 0 or truck_speed <= 0:
+        raise ValueError("vehicle configuration must be positive")
+
+    rows = [profile["depot"], *profile["customers"]]
+    nodes = torch.tensor([rows], dtype=torch.float32)
+    return {
+        "format": DATASET_FORMAT,
+        "node_features": list(NODE_FEATURES),
+        "nodes": nodes,
+        "vehicle_config": {
+            "truck_speed": float(truck_speed),
+            "truck_capacity": float(truck_capacity),
+            "num_trucks": int(num_trucks),
+        },
+        "generation": {
+            "method": "exact_single_scenario",
+            "reference_dir": str(path.parent),
+            "reference_scenarios": 1,
+            "source_scenario": str(path),
+            "sample_count": 1,
+            "customer_count": int(customer_count),
+            "seed": None,
+            "jitter": 0.0,
+        },
+    }
+
+
 def save_dataset(dataset: Dict[str, object], output_path: str) -> None:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -255,7 +300,7 @@ class TensorProblemDataset(Sequence[Problem]):
 
     H400 with 10,000 generated instances contains four million requests.
     Keeping those as a tensor and constructing only the sampled instance makes
-    global training practical without changing the simulator or PPO rollout.
+    large-dataset training practical without changing the simulator or rollout.
     """
 
     def __init__(self, dataset: Dict[str, object]):
@@ -322,6 +367,7 @@ __all__ = [
     "TensorProblemDataset",
     "VEHICLE_CONFIGS",
     "discover_csvs",
+    "dataset_from_scenario",
     "fitness_value",
     "generate_from_reference",
     "infer_vehicle_config",

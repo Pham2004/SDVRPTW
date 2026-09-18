@@ -177,7 +177,7 @@ class Individual:
 
 def select_parent(gpc, pop):
     # sample 8 and pick best by fitness
-    idxs = random.sample(range(len(pop)), k=min(8, len(pop)))
+    idxs = gpc.rng.sample(range(len(pop)), k=min(8, len(pop)))
     # lower fitness is better
     return min(idxs, key=lambda i: pop[i].result[3])
 
@@ -258,7 +258,7 @@ def gp(problem : problem_mod.Problem):
         for _ in range(half):
             p1 = select_parent(gpc, pop)
             p2 = select_parent(gpc, pop)
-            x = random.random()
+            x = gpc.rng.random()
             if x <= CROSSOVER_RATE:
                 c1, c2 = pop[p1].crossover_with(gpc, pop[p2])
                 new_pop.extend([c1, c2])

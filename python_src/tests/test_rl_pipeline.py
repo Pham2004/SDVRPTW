@@ -64,6 +64,34 @@ class RLPipelineTests(unittest.TestCase):
             self.assertTrue(all(req.type in (0, 1)
                                 for req in problems[0].requests))
 
+    def test_exact_single_scenario_dataset_is_not_bootstrapped(self):
+        from rl.data import dataset_from_scenario, problems_from_dataset
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            csv_path = os.path.join(temp_dir, "sample_1.csv")
+            rows = [
+                ["x", "y", "demand", "open", "close", "servicetime",
+                 "drone_serve", "time", "profit", "type"],
+                [0, 0, 0, 0, 100, 0, 1, 0, 0, 0],
+                [1, 2, 3, 10, 30, 4, 0, 5, 7, 1],
+                [4, 5, 6, 20, 50, 4, 1, 0, 11, 0],
+            ]
+            with open(csv_path, "w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+
+            dataset = dataset_from_scenario(
+                csv_path, num_trucks=1, truck_capacity=20,
+            )
+            problems = problems_from_dataset(dataset)
+
+            self.assertEqual(tuple(dataset["nodes"].shape), (1, 3, 10))
+            self.assertEqual(
+                dataset["generation"]["method"], "exact_single_scenario"
+            )
+            self.assertEqual(dataset["generation"]["reference_scenarios"], 1)
+            self.assertEqual(problems[0].requests[0].profit, 7.0)
+            self.assertEqual(problems[0].requests[1].profit, 11.0)
+
     def test_global_sampling_budget_counts_physical_rollouts(self):
         from rl.ppo import PPOConfig, PPOTrainer
         from sim.problem import Problem, Request

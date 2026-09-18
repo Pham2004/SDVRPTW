@@ -45,43 +45,44 @@ The step reward is an exact additive form of the GP objective (up to the
 constant `1-WEIGHT`), so maximizing episode return ranks solutions exactly as
 minimizing `main.fitness`.
 
-## Fair evaluation budget
+## Fair one-scenario-per-instance protocol
 
-By default the RL search budget is:
+The corrected GP and RL runners use the same experimental unit:
 
-```text
-MAX_EVALUATIONS (if set), otherwise POP_SIZE * NUM_GEN
+- one separately trained model per benchmark instance;
+- the first CSV scenario is the only training scenario for that model;
+- both methods use that CSV exactly, without GP's legacy `clone_training`
+  transformation or RL bootstrap/jitter;
+- the requested scenarios are evaluated deterministically after training;
+- training and reporting simulator calls are counted separately.
+
+RL repeats stochastic policy rollouts on that one fixed scenario. It no longer
+bootstraps training data from the full target benchmark, so evaluation rows do
+not feed the training-data generator. GP uses a seeded minimization tournament;
+duplicate tree pairs remain memoized, and the manifest records its actual cache
+misses rather than assuming every configured candidate caused a rollout.
+
+With the defaults, each instance gets at most `100 * 100 = 10,000` GP objective
+evaluations and exactly `10,000` RL training rollouts. Aggregate budget is the
+per-instance value multiplied by the number of instances.
+
+## One-command runs
+
+### Corrected GP
+
+```powershell
+python python_src/run_gp_pipeline.py datasets/h200_new --seed 42 `
+  --routing-depth 8 --sequencing-depth 6
+python python_src/run_gp_pipeline.py datasets/h400_new --seed 42 `
+  --routing-depth 8 --sequencing-depth 6
 ```
 
-With the repository defaults this is `100 * 100 = 10,000` objective
-evaluations. One objective evaluation means one sampled policy evaluated on
-the same GP training subset,
-`ceil(SCENARIO_TRAIN_RATIO * number_of_scenarios)`, then averaged. The JSON
-records both:
+The runner defaults to routing depth 8 and sequencing depth 6. `--max-depth`
+is retained only as a legacy shared override. Add `--use-training-clone` only
+when reproducing the old GP data-transformation protocol rather than the fair
+exact-CSV run.
 
-- `objective_evaluations`: strict search budget, comparable to candidate GP
-  evaluations / ACO ants;
-- `training_simulator_rollouts`: physical simulator calls, equal to objective
-  evaluations times the number of training scenarios.
-
-Deterministic reporting over every requested scenario is stored separately as
-`report_simulator_rollouts` and does not consume the search budget, analogous
-to GP's `full_result` reporting pass.
-
-Note that GP memoizes duplicate tree pairs, so its actual physical simulator
-rollouts can be lower than `POP_SIZE * NUM_GEN`. The original GP selection,
-RNG, and stopping behavior have intentionally not been changed by this RL
-baseline.
-
-## COAST-style global pipeline
-
-The recommended workflow now follows COAST's separation of data generation,
-training, and checkpoint inference. It does **not** copy COAST's VECTRA model,
-7-feature DVRPTW environment, or distance/late/pending objective. The algorithm
-remains this repository's masked PPO above, and every rollout still goes
-through the canonical SDVRPTW `Simulation` and distance/profit fitness.
-
-### One-command run for H100, H200, or H400
+### RL trained on exactly one scenario per instance
 
 ```powershell
 # H100
@@ -94,76 +95,68 @@ python python_src/run_rl_pipeline.py datasets/h200_new --device cuda
 python python_src/run_rl_pipeline.py datasets/h400_new --device cuda
 ```
 
-Each invocation generates its training dataset, trains exactly one global
-checkpoint, evaluates every discovered instance/scenario in the selected
-folder, and writes an isolated timestamped directory under `rl_runs/`. It
-contains `training_dataset.pt`, `checkpoint.pt`, detailed `results.json`,
-per-instance plus `OVERALL` `summary.csv`, and `run_manifest.json`.
+Each invocation trains one checkpoint per discovered instance. For each model,
+the dataset artifact has shape `(1, customers + 1, 10)` and contains the first
+CSV scenario without bootstrap, jitter, or row resampling. Evaluation uses up
+to 16 scenarios from the same instance. The timestamped output directory has
+aggregate `results.json`, `summary.csv`, and `run_manifest.json`, plus one
+subdirectory per instance containing its dataset, checkpoint, and raw results.
 
-The generator automatically uses the repository fleet mapping: H100 uses
-10 trucks/capacity 200, H200 uses 50/400, and H400 uses 100/800. Defaults are
-10,000 generated samples, 10,000 training simulator evaluations, seed 42, and
-at most 16 scenarios per instance. All can be overridden, for example:
+The fleet mapping remains H100 `10/200`, H200 `50/400`, and H400 `100/800`.
+
+## Full GP/RL benchmark suite
+
+Run both algorithms on H100, H200, and H400 with paired seeds 42--46:
+
+```powershell
+.\run_all_experiments.bat
+```
+
+The default protocol trains one model/policy per instance on scenario 1 and
+reports only scenarios 2--16. GP uses routing depth 8, sequencing depth 6, and
+a nominal 10,000 evaluations (100 generations x 100 population); RL uses
+10,000 evaluations. Results are written under `benchmark_runs/gp_rl_5seeds/`.
+Rerunning the same command resumes the suite and skips completed runs.
+
+The main aggregate files are `runs.csv` (every seed),
+`summary_by_algorithm.csv` (mean/std/95% CI and actual budgets),
+`summary_by_instance.csv`, `paired_comparison.csv`, and
+`comparison_summary.csv`. Fitness is minimized; the paired delta is
+`RL fitness - GP fitness`, so a positive value means GP won that seed.
+
+To force RL onto a specific GPU, pass for example `--device cuda:0`. Use a new
+`--output-dir` whenever changing benchmark parameters.
+Useful overrides are:
 
 ```powershell
 python python_src/run_rl_pipeline.py datasets/h400_new --device cuda:0 `
-  --samples 20000 --max-evaluations 10000 --seed 43
+  --max-evaluations 10000 --max-scenarios 16 --seed 43
 ```
 
-### 1. Generate a training dataset once
+To run the three stages manually for one instance:
 
 ```powershell
-python python_src/generate_rl_dataset.py datasets/h100_new `
-  datasets/rl_train_h100.pt --samples 10000 --seed 42
-```
+# Exact scenario; the resulting tensor contains one problem only.
+python python_src/generate_rl_dataset.py `
+  datasets/h200_new/h200c101/h200c101_1.csv `
+  datasets/rl_train_h200c101.pt
 
-The artifact stores all ten CSV fields. Synthetic scenarios are generated by
-horizon-stratified empirical bootstrap with small jitter, retaining joint
-relationships between demand, time windows, reveal time, profit, and type.
-For a strict held-out experiment, point `reference_dir` at a separate
-generation/reference split rather than the scenarios used for final testing.
-
-### 2. Train one global checkpoint once
-
-```powershell
-python python_src/train_rl_checkpoint.py datasets/rl_train_h100.pt `
-  --output rl_checkpoints/sdvrptw_h100_seed42.pt `
+python python_src/train_rl_checkpoint.py datasets/rl_train_h200c101.pt `
+  --output rl_checkpoints/h200c101_seed42.pt `
   --max-evaluations 10000 --seed 42 --device cuda
-```
 
-This is one training run, not one run per H100 instance. With H100 and the GP
-defaults, `ceil(16 * SCENARIO_TRAIN_RATIO) = 1`, so one GP individual
-evaluation and one global-PPO training evaluation both make one simulator
-rollout. Thus the strict `10,000` limit is both the policy-evaluation count and
-the physical training-rollout count. PPO optimization epochs reuse collected
-trajectories and do not consume more simulator evaluations.
-
-There are two valid comparison conventions and the chosen one must be reported:
-
-- **Per trained model:** `10,000` for the one global RL checkpoint versus
-  `10,000` for each instance-specific GP model.
-- **Aggregate H100 search compute:** H100 currently has 56 instances, so the
-  configured GP total is `56 * 10,000 = 560,000`; use
-  `--max-evaluations 560000` if RL must receive that same aggregate number of
-  simulator calls. GP's cache can make its actual physical count lower, so a
-  strict wall-clock/rollout study should also instrument GP cache misses.
-
-### 3. Evaluate that checkpoint on all H100 instances
-
-```powershell
 python python_src/evaluate_rl_checkpoint.py `
-  rl_checkpoints/sdvrptw_h100_seed42.pt datasets/h100_new `
-  --output datasets/rl_checkpoint_results_seed42.json --device cuda
+  rl_checkpoints/h200c101_seed42.pt datasets/h200_new/h200c101 `
+  --output datasets/h200c101_rl_seed42.json --device cuda
 ```
 
-Omitting the optional positional limits evaluates every discovered instance
-and up to 16 scenarios per instance. These deterministic report rollouts are
-tracked separately and never added to the training/search budget, matching the
-role of GP's reporting pass.
+Passing a directory to `generate_rl_dataset.py` still exposes the old synthetic
+bootstrap utility for controlled ablations, but the fair pipeline never uses
+that mode.
 
-For a paper, train independent checkpoints for multiple seeds (for example
-`42`, `43`, `44`) and report mean/std. Each seed is one complete training run;
-do not retrain per scenario or per instance.
+For a paper, repeat both complete GP and RL pipelines for the same independent
+seeds (for example `42` through `51`) and report mean/std over corresponding
+per-instance results.
 
 ## Legacy per-instance command
 
@@ -186,9 +179,8 @@ python python_src/rl_dvrptw.py datasets/h100_new 1 16 `
 ```
 
 This older command writes `rl_results.json` beside the target dataset directory
-and trains one `.pt` checkpoint per instance under `rl_checkpoints/`. Keep it
-only for reproducing the first baseline; use the three-stage pipeline above for
-the COAST-style global-policy experiment.
+and trains checkpoints under `rl_checkpoints/`. Keep it only for reproducing
+the first baseline; use `run_rl_pipeline.py` for auditable fair runs.
 
 For a fast end-to-end check:
 
@@ -220,9 +212,7 @@ The audit fixed these canonical simulator defects:
 - invalid speed/truck configuration and accidental simulator reuse fail fast;
 - dropped requests are exposed through `Simulation.dropped_requests`.
 
-The audit also found pre-existing GP inconsistencies that were deliberately
-left behavior-compatible: CSV GP/demo tournament selection uses `max` although
-fitness and survivor selection use minimization; `tensor_main.py` uses `min`;
-and `CONST_RATE` currently falls back to `0.1` in `gp/mod.py` under the normal
-top-level import path. These should be resolved as a separate GP change so
-historical baseline results are not silently invalidated.
+The GP audit additionally fixed reversed tournament selection, routed parent
+selection and crossover decisions through the configured seeded RNG, removed
+the circular-import fallback that silently changed `CONST_RATE`, and added
+regression coverage for minimization selection.

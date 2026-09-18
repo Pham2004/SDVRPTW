@@ -22,27 +22,30 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import random
 from typing import Callable, Iterable, List, Tuple
-
-try:
-	from ..main import CONST_RATE  # best-effort import if exposed
-except Exception:
-	CONST_RATE = 0.1
 
 from .GPtree import Node, Program, ProgramContext, MAX_PROGRAM_NODE_CHILDREN
 
 
 # chứa các hàm tiện ích trong quá trình sử dụng cây GP
 class GPContext:
-	def __init__(self, rng: random.Random, num_population: int, max_depth: int):
+	def __init__(self, rng: random.Random, num_population: int, max_depth: int,
+				 const_rate: float = None):
 		self.rng = rng
 		self.num_population = num_population
 		self.max_depth = max_depth
+		self.const_rate = (
+			float(os.environ.get("CONST_RATE", "0.0"))
+			if const_rate is None else float(const_rate)
+		)
+		if not 0.0 <= self.const_rate <= 1.0:
+			raise ValueError("const_rate must be in [0, 1]")
 
 	def gen_terminal_at(self, program: Program, index: int) -> None:
 		"""Generate a terminal at `index` (or a small internal chunk with probability CONST_RATE)."""
-		terminal = self.rng.random() < (1.0 - CONST_RATE)
+		terminal = self.rng.random() < (1.0 - self.const_rate)
 		if terminal:
 			term_index = self.rng.randrange(0, program.context.num_terminals())
 			program.generate_at(index, 0, Node.Terminal(term_index), lambda *_: None)

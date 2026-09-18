@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 2: train one global masked-PPO policy and save its checkpoint."""
+"""Stage 2: train a masked-PPO policy and save its checkpoint."""
 from __future__ import annotations
 
 import argparse
@@ -23,7 +23,7 @@ from rl.ppo import PPOConfig, PPOTrainer
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Train one global masked-PPO checkpoint on a generated dataset"
+        description="Train one masked-PPO checkpoint on an SDVRPTW dataset"
     )
     parser.add_argument("dataset", help="training .pt from generate_rl_dataset.py")
     parser.add_argument("--output", default="rl_checkpoints/sdvrptw_global.pt")
@@ -74,9 +74,9 @@ def main(argv=None) -> int:
     def objective(problem, result):
         return fitness_value(problem, result, args.weight)
 
-    # H100 GP trains each individual on ceil(16 * 0.05) = one scenario.
-    # Sampling exactly one generated Problem per objective evaluation therefore
-    # makes evaluation_count equal the physical simulator-rollout count.
+    # One problem is sampled per objective evaluation. For the fair pipeline,
+    # the dataset itself contains exactly one fixed CSV scenario, so every
+    # stochastic policy rollout sees that same scenario.
     trainer = PPOTrainer(
         training_problems=problems,
         training_time_slots=time_slots,
@@ -90,7 +90,7 @@ def main(argv=None) -> int:
         restore_best=False,
     )
     print("=" * 72)
-    print("Global masked PPO training for repository SDVRPTW")
+    print("Masked PPO training for repository SDVRPTW")
     print("=" * 72)
     print(
         f"dataset={os.path.abspath(args.dataset)} samples={len(problems)} "
@@ -106,7 +106,8 @@ def main(argv=None) -> int:
 
     checkpoint = trainer.checkpoint()
     checkpoint.update({
-        "pipeline": "generated_dataset_train_checkpoint_evaluate",
+        "pipeline": "dataset_train_checkpoint_evaluate",
+        "training_data_method": dataset.get("generation", {}).get("method"),
         "selection": "final_policy",
         "weight": float(args.weight),
         "num_time_slots": float(args.num_time_slots),

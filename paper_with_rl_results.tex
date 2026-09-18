@@ -1,0 +1,1257 @@
+\documentclass[pdflatex]{sn-jnl}
+\usepackage{amssymb}
+\usepackage{amsmath}
+%\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+\usepackage{glossaries} % load gói glossaries
+\makeglossaries
+\input{gl}
+
+\usepackage{longtable}
+\usepackage{graphicx}
+\usepackage[utf8]{inputenc}
+\usepackage{xcolor}
+\usepackage{pgfplotstable}
+\usepackage{hyperref}
+\usepackage{multirow} 
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{longtable}
+\usepackage{amsmath}
+\usepackage{lipsum, multicol}
+\usepackage{makecell}
+\usepackage[numbers]{natbib}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{mathtools}
+\usepackage{comment}
+\usepackage{placeins}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{mathtools}
+\usepackage{xcolor}
+\usepackage{color}
+\usepackage{threeparttable}
+\usepackage{tabularx}
+%\usepackage[linesnumbered,ruled,vlined]{algorithm2e}
+\begin{document}
+ \title{Evolving Routing Policies for Stochastic Dynamic Vehicle Routing Problems with Time Windows Using Genetic Programming} 
+ %\author[1]{\fnm{Bui Dinh} \sur{Pham}}\email{pham.bd220039@sis.hust.edu.vn}
+% 	\author*[2]{\fnm{Nguyen Thi} \sur{Tam}}\email{tamnt@vnu.edu.vn}
+% \author[1]{\fnm{Bui Trong} \sur{Duc}}\email{ducbt@soict.hust.edu.vn}
+% 	\author[1]{\fnm{Huynh Thi Thanh} \sur{Binh}}\email{binhht@soict.hust.edu.vn}
+% 	\author[3]{\fnm{Le Trong} \sur{Vinh}}\email{vinhlt@haui.edu.vn}
+% 	\affil[1]{\orgname{Hanoi University of Science and Technology}, \orgaddress{ \city{Hanoi}, \postcode{100000}, \country{Vietnam}}}
+	
+% 	\affil[2]{\orgname{VNU University of Science}, \orgaddress{\city{Hanoi}, \postcode{100000}, \country{Vietnam}}}
+
+%     \affil[3]{\orgname{Hanoi University of Industry}, \orgaddress{\city{Hanoi}, \postcode{100000}, \country{Vietnam}}}
+\abstract{
+We study a stochastic capacitated vehicle routing problem with time windows and profit-based customer acceptance, in which deterministic customers, known in advance, coexist with stochastic customers whose realizations, demands and profits are revealed only at execution time. The goal is to balance routing cost against collected profit across sampled scenarios while preserving capacity and time-window feasibility. Rather than re-optimizing whenever new information arrives, we propose an interpretable policy-learning framework based on genetic programming (GP) that evolves symbolic dispatching rules for two coupled online decisions: assigning newly revealed requests to
+vehicles and selecting the next customer to serve from each vehicle's queue. Each individual is encoded as a pair of expression trees queried by an event-driven simulator, so that feasibility is guaranteed by construction rather than enforced through penalty terms. Using sample average approximation, the dynamic stochastic problem is reduced to a collection of dynamic deterministic problems, and reusing a fixed set of truncated training scenarios across generations yields a deterministic, low-variance and cache-friendly fitness signal that stabilizes the search. Extensive experiments on the Solomon benchmark and its 200- and 400-customer extensions show that the learned policies consistently outperform five rule-based heuristics and a dynamic ant colony optimization metaheuristic in fitness, profit and statistical rank (Friedman and Wilcoxon tests with Holm correction). A supplementary single-seed comparison with a masked-PPO policy reveals a scale-dependent trade-off: GP obtains better fitness on the 100-customer benchmark, whereas PPO achieves lower fitness on the 200- and 400-customer benchmarks by serving more profitable requests at the cost of substantially longer routes. These results highlight the interpretability and small-scale data efficiency of GP while identifying large-scale neural policy learning as an important direction for further comparison.}
+\keywords{
+stochastic vehicle routing problem, genetic programming, evolutionary algorithms}
+\maketitle
+
+\section{Introduction}
+
+Vehicle routing is a central decision problem in logistics and transportation, where the objective is to design cost-effective routes for a fleet of vehicles serving geographically distributed customers under operational constraints. Its wide applicability in freight transportation, supply chain management, last-mile delivery and emergency logistics has made the \gls{vrp} one of the most extensively studied problems in operations research~\cite{toth2002vehicle}.
+Classical \gls{vrp} models usually assume that all customer and network
+information is available before optimization. Although this assumption enables well-structured mathematical formulations, it does not fully capture many real-world routing systems in which information is gradually revealed and operational conditions change over time.
+
+In dynamic logistics environments, routing decisions must often be made before all customer information is known. Some customers may be deterministic and available at the beginning of the planning horizon, while others may appear only under certain realizations. Moreover, the demand and profit associated with a request may be uncertain until the request is revealed. These characteristics are particularly relevant in on-demand delivery, same-day logistics, emergency response and service systems where accepting or rejecting a request affects
+both routing cost and collected revenue. Consequently, a routing method should not only construct feasible routes under capacity and time-window constraints, but also decide which realized customers should be served and how vehicles should be assigned and sequenced in an online manner. Scenario-based stochastic optimization provides a natural way to model such uncertainty. Recent studies have shown that stochastic programming, decomposition and recourse-based methods can effectively represent uncertain demands, customer realizations and operational conditions \cite{delavega2023integer,alvarez2024consistent,reusken2024vehicle}. However, these methods often require repeated scenario evaluation or re-optimization, which becomes computationally expensive when the routing problem is large, highly dynamic or repeatedly solved during execution. Metaheuristic and matheuristic approaches improve scalability, but they still typically search for solutions for each problem instance rather than producing a reusable online
+decision policy ~\cite{ozarik2023adaptive,wang2025truck,tureci2025stochastic}.
+This limits their suitability for settings where decisions must be made
+immediately after new stochastic information becomes available.
+
+A promising alternative is to learn dispatching policies that can be trained offline and deployed online. Such policies transform the routing process from repeated re-optimization into a sequence of fast priority-based decisions. However, many learning-based methods rely on black-box models, making it difficult to interpret why a vehicle or customer is selected. This lack of interpretability is undesirable in stochastic routing, where decision makers may
+need transparent and reusable rules that remain effective across unseen
+realizations. These observations motivate the development of an interpretable policy-learning approach for stochastic vehicle routing.
+
+This paper studies a stochastic capacitated vehicle routing problem with time windows and profit-based customer acceptance. The customer set is divided into deterministic customers, whose information is known in advance, and stochastic customers, whose realization and attributes are scenario-dependent. The objective is to balance routing cost and collected profit over sampled scenarios while maintaining capacity and time-window feasibility. To solve this problem, we propose a \gls{gp}-based framework that evolves symbolic dispatching rules for online routing and sequencing decisions. Rather than
+encoding complete routes, each \gls{gp} individual represents a pair of
+priority functions that are queried during simulation: one for assigning incoming requests to vehicles and one for selecting the next customer to serve. The learned rules are trained over sampled scenarios and then directly deployed on unseen stochastic realizations without re-optimization. The main contributions of this paper are summarized as follows:
+
+\begin{itemize}
+    \item Formulate a stochastic capacitated vehicle routing problem with time windows and profit-based customer acceptance, where deterministic and stochastic customers coexist and the objective balances routing cost and collected profit across scenario-dependent realizations.
+
+    \item Develop an interpretable \gls{gp}-based policy-learning framework that evolves symbolic dispatching rules for two coupled online decisions: vehicle assignment for newly revealed requests and service sequencing for queued customers.
+
+    \item Design a scenario-based training scheme in which candidate
+    dispatching policies are evaluated over sampled stochastic realizations, enabling the evolved rules to generalize to unseen scenarios while avoiding repeated online re-optimization.
+
+    \item Conduct extensive computational experiments on benchmark
+    instances with different scales and dynamicity levels, and compare the proposed method with rule-based heuristics, a dynamic metaheuristic and a masked-PPO learning baseline in terms of solution quality, robustness and scalability.
+\end{itemize}
+
+The remainder of this paper is organized as follows.
+Section~\ref{sec:related} reviews the related literature on \gls{svrp} and presents the problem formulation. Section~\ref{sec:propose} introduces the proposed \gls{gp}-based policy-learning framework. Section~\ref{sec:exp} reports and discusses the experimental results. Finally, Section~\ref{sec:con} concludes the paper and outlines future research directions.
+% \section{Introduction}
+% The \gls{vrp} is a fundamental optimization problem in operations research and logistics, aiming to determine the most efficient routes for a fleet of vehicles to serve a set of customers under various constraints. Since its introduction, \gls{vrp} has been extensively studied due to its wide range of real-world applications, including transportation, supply chain management, and last-mile delivery systems \cite{toth2002vehicle}. Traditional \gls{vrp} formulations typically assume that all problem parameters, such as customer demands, travel times, and service times, are known in advance and remain deterministic throughout the planning horizon.
+
+% However, in many real-world scenarios, factors such as fluctuating customer demands, stochastic travel times due to traffic conditions, and uncertain service durations can significantly impact routing decisions. To address these challenges, the \gls{svrp} has been introduced, where one or more components of the problem are modeled as random variables. This stochastic nature makes the problem more realistic but also significantly increases its complexity. \gls{svrp} \cite{nurcahyadi2025vehicle} has been studied under various uncertainty settings, including stochastic demands, stochastic travel times, and stochastic customer availability. Depending on when the uncertainty is revealed, \gls{svrp}  can be categorized into a priori optimization, where decisions are made before the realization of uncertainty, and adaptive or recourse-based approaches, where routing decisions are dynamically adjusted during execution. These formulations require sophisticated modeling techniques and solution methods capable of balancing solution quality and computational efficiency.
+
+% To solve \gls{svrp}, a wide range of approaches have been proposed in the literature. Exact methods, such as stochastic programming and robust optimization, aim to provide optimal or near-optimal solutions but often suffer from scalability issues when applied to large-scale instances. On the other hand, heuristic and metaheuristic approaches, including Genetic Algorithms \cite{ali2016adaptive, messaoud2022solving}, Ant Colony Optimization \cite{messaoud2024hybrid}, and Variable Neighborhood Search \cite{zhang2025improved}, have been widely adopted due to their ability to efficiently explore large solution spaces. More recently, learning-based approaches, such as reinforcement learning \cite{iklassov2024reinforcement} and surrogate-assisted optimization, have shown promising results in handling uncertainty and improving decision-making in stochastic environments.
+
+% Despite these advances, several challenges remain. First, effectively modeling uncertainty while maintaining computational tractability is still a critical issue. Second, many existing methods either rely on simplified assumptions or lack adaptability to real-time changes. Third, there is a growing need for methods that not only achieve high solution quality but also provide interpretable and robust decision-making strategies in uncertain environments.
+
+% The main contributions of this paper can be summarized as follows:
+
+% \begin{itemize}
+%     \item 
+% \end{itemize}
+
+% The remainder of this paper is organized as follows: Section \ref{sec:related} provides a preliminary overview of \gls{svrp}, reviews the existing literature addressing these problems, and outlines the motivations for this study. Section \ref{sec:propose}
+% details the proposed methods. In Section \ref{sec:exp}, extensive experimental results and analyses are presented and discussed. Finally, Section \ref{sec:con} summarizes the key findings
+% of this paper and proposes future research directions.
+
+\section{Related work} \label{sec:related}
+This section first gives the definition of the \gls{svrp}, then briefly reviews existing work addressing \gls{svrp}, and finally discusses the motivations of this study.
+
+\subsection{Stochastic vehicle routing problem}
+
+\gls{svrp} generalizes the classical \gls{vrp} by incorporating uncertainty into routing-relevant information, including customer demand, travel time, service duration, customer availability, and service profit \cite{zhao2025two}. This extension is practically important because logistics systems rarely operate under fully deterministic conditions. Customer requests may be revealed progressively, realized demands may deviate from their nominal
+values, and operational conditions may change during execution \cite{hoogendoorn2025evaluation}. Therefore, routing decisions in \gls{svrp} should be assessed across multiple realizations of uncertainty rather than a single deterministic instance.
+
+Demand uncertainty is a major source of stochasticity in vehicle routing, directly influencing capacity feasibility, route robustness, and the need for recourse actions. Recent studies have strengthened the algorithmic foundation of \gls{vrp} with stochastic demands through Bayesian learning, correlated demand modeling, and exact branch-price-and-cut frameworks~\cite{florio2023recent,kadyrov2025deep}. For variants with time windows, two-stage stochastic programming and integer L-shaped decomposition have been utilized for modeling post-realization recourse~\cite{delavega2023integer}. Similar decomposition principles have been extended to simultaneous delivery and stochastic pickup settings, where pickup and delivery decisions interact with uncertain demand realizations~\cite{che2023integer,lin2025advanced}. Additionally, the research~\cite{parada2024disaggregated} has
+further exploited structural properties of recourse functions, such as
+monotonicity, to improve the computational efficiency of stochastic
+decomposition. These studies provide rigorous models for demand uncertainty, but their scalability is often limited by the number of scenarios and the cost of recourse evaluation.
+
+Uncertainty in customer presence and service availability is particularly important in dynamic and last-mile delivery systems, where the actual set of customers to be served may not be fully known in advance \cite{karels2024vehicle}. Routing with probabilistic customers requires solutions that remain effective under scenario-dependent customer realizations~\cite{lagos2023branch}. In last-mile delivery, stochastic customer availability introduces failed delivery attempts and repeated visits, increasing both operational complexity and recourse cost~\cite{ozarik2023adaptive}. Service consistency has also been integrated with stochastic customers and demands, leading to models that jointly consider regularity of service and uncertainty in customer realization \cite{alvarez2024consistent}. 
+
+Operational uncertainty extends \gls{svrp} beyond customer-side randomness by capturing variations in service time, waiting time, travel time and energy consumption. In collection operations, stochastic demand, service time and waiting time have been modeled jointly, with matheuristic decomposition used to obtain tractable solutions~\cite{reusken2024vehicle}. In hybrid truck--drone
+systems, stochastic travel times directly affect deadline satisfaction and time-window feasibility, especially when delivery deadlines or soft time windows are imposed~\cite{meng2024multi,deng2024stochastic}. Energy-related uncertainty has also become increasingly important in electric vehicle routing, where energy consumption and battery status may vary with traffic, load, speed, and charging conditions. Recent studies have therefore modeled such uncertainty using stochastic recourse and two-stage optimization frameworks \cite{spinelli2026stochastic,yuan2026mitigate}. These studies show that
+\gls{svrp} has moved beyond classical demand uncertainty toward richer
+operational settings with multiple interacting sources of uncertainty.
+
+Integrated and multi-modal logistics systems further increase the complexity of stochastic routing by coupling routing decisions with vehicle coordination, facility location and heterogeneous fleet operations. Truck--drone routing with stochastic demand introduces coordination decisions between ground vehicles and aerial vehicles, where the benefit of drones depends on both demand realization
+and route synchronization~\cite{wang2025truck}. Stochastic location-routing with parallel truck--drone operations further couples strategic facility decisions with scenario-dependent routing outcomes~\cite{tureci2025stochastic}. This direction reflects a broader trend in stochastic routing: models are increasingly designed for dynamic, large-scale and real-time decision environments, where robustness, adaptability and computational efficiency must
+be considered simultaneously. 
+From a methodological perspective, exact and decomposition-based methods provide strong modeling guarantees for structured stochastic problems, but their performance is sensitive to scenario size, recourse structure and uncertainty dimensionality. Matheuristics and metaheuristics improve scalability by combining optimization models with heuristic search; however, they may still require substantial re-optimization when new information is revealed online. By
+contrast, policy-based methods aim to learn reusable decision rules that can be applied directly during execution. This property is particularly attractive for dynamic and stochastic routing, where online decision latency is as important as solution quality.
+
+%Despite these advances, several research gaps remain. First, many stochastic programming models rely on scenario-based recourse evaluation, which becomes computationally expensive in large-scale and highly dynamic settings. Second, although matheuristic and metaheuristic approaches can obtain high-quality solutions, their repeated use during online operation may be impractical when requests arrive frequently. Third, learning-based approaches offer fast online decisions, but black-box policies may lack interpretability and transferability across routing conditions. To address these limitations, this paper develops an interpretable policy-based approach using \gls{gp}. Instead of repeatedly solving a stochastic routing model from scratch, the proposed method evolves symbolic dispatching rules over sampled scenarios during training and deploys the learned rules directly for online routing and sequencing decisions on unseen stochastic realizations.
+
+Despite these advances, solving large-scale stochastic routing problems remains challenging because uncertainty must be explicitly considered during optimization. This challenge becomes even more pronounced in dynamic environments, where routing decisions must be made immediately after new information becomes available. Consequently, policy-learning approaches have recently attracted increasing attention as an alternative to repeated online optimization.
+\subsection{Genetic Programming Hyper-Heuristics}
+Among policy-learning approaches, \gls{gphh} ave been widely applied to dynamic routing and scheduling problems due to their ability to evolve reusable and interpretable dispatching policies. Previous studies have demonstrated the effectiveness of GPHH in \gls{dvrptw} \cite{jacobsen2017evolving, tam2025evolving}, uncertain capacitated arc routing problems \cite{maclachlan2020genetic}, and dynamic dial-a-ride problems \cite{huang2025genetic}, where routing decisions are made online through evolved priority rules. These approaches have shown that policy-based optimization can provide competitive solution quality while avoiding repeated re-optimization during execution. 
+Despite their success, existing GPHH studies primarily focus on deterministic or partially uncertain routing environments. In most cases, the customer set is either fully known in advance or only dynamically revealed over time, while customer attributes remain deterministic after revelation. Furthermore, the majority of existing studies optimize routing cost, travel distance, service quality, or workload balancing, without explicitly considering profit-driven customer acceptance decisions under uncertainty.
+
+The problem studied in this paper differs from existing \gls{gphh} based routing research in several important aspects. \textit{First}, we consider a stochastic customer realization setting in which deterministic customers coexist with stochastic customers whose presence is scenario-dependent. Consequently, the set of customers to be served is itself uncertain and cannot be fully determined before execution. This setting introduces an additional layer of uncertainty beyond the dynamic request arrivals commonly considered in the \gls{dvrptw} literature. \textit{Second}, the proposed model simultaneously incorporates uncertainty in customer realization, demand, and profit. Existing \gls{gphh} studies typically assume deterministic customer attributes once a request becomes available. In contrast, the proposed formulation explicitly models stochastic profits and demands, requiring dispatching policies to balance expected routing cost against expected collected profit across multiple realizations. \textit{Third}, the routing process includes profit-based customer acceptance decisions. Instead of assuming that all revealed customers must be served, the proposed framework allows customers to be accepted or rejected depending on their contribution to the overall objective. This introduces a fundamentally different decision-making mechanism compared with conventional \gls{gphh} approaches that focus solely on routing and sequencing decisions. \textit{Finally}, we adopt a scenario-aware policy-learning framework based on sample average approximation. Rather than evolving policies on a single deterministic environment, candidate policies are evaluated across multiple stochastic realizations during training, enabling the learned rules to generalize to previously unseen scenarios. This allows the framework to address stochastic routing environments while preserving the interpretability and low-latency characteristics of \gls{gphh}.
+
+\section{Problem formulation}
+
+We study a stochastic capacitated vehicle routing problem with time windows and profit-based customer acceptance.
+The distribution system is represented by a complete directed graph $G=(V,E)$, where
+$V=\{v_0\}\cup N_1 \cup N_2$ is the node set and $E\subseteq V\times V$ is the arc set.
+Node $v_0$ denotes the depot, whereas all remaining nodes correspond to customers.
+The customer set is partitioned into two subsets.
+Set $N_1$ contains deterministic customers whose attributes are fully known in advance, while set $N_2$ contains stochastic customers whose exact characteristics are revealed only upon realization.
+
+A fleet of $K$ identical vehicles is stationed at the depot.
+Each vehicle has capacity $C$, starts from the depot and returns to the depot after completing its route.
+For each arc $(i,j)\in E$, let $c_{ij}$ and $\tau_{ij}$ denote the travel distance and travel time, respectively.
+
+Each customer $i\in V\setminus\{v_0\}$ is associated with a demand $d_i$, a service time window $[s_i,e_i]$, an arrival time $t_i$, a profit $p_i$ and a binary type indicator $\mathrm{type}_i$.
+Specifically, $\mathrm{type}_i=0$ indicates that customer $i\in N_1$, whereas $\mathrm{type}_i=1$ indicates that customer $i\in N_2$.
+For deterministic customers, all parameters are known prior to planning.
+For stochastic customers, however, only the probability distributions of demand and profit are assumed to be available before realization.
+
+Uncertainty is modeled through a finite set of scenarios $\mathcal{S}$.
+For each scenario $s\in\mathcal{S}$, let $N_2^s$ denote the realized set of stochastic customers.
+The customer set under scenario $s$ is therefore $N^s = N_1 \cup N_2^s$, and the corresponding scenario-dependent graph is denoted by $G^s=(V^s,E^s)$ with $ \qquad V^s=\{v_0\}\cup N^s$.
+Throughout the formulation, scenarios are assumed to be equiprobable. The solution specifies, for each vehicle, an ordered sequence of visited nodes, and for each customer, whether the customer is served and, if so, the corresponding service start time.
+The notation used in the model is summarized in Table~\ref{tab:notation_svrptw}.
+
+\begin{table}
+\centering
+\caption{Notation used in the stochastic routing model}
+\label{tab:notation_svrptw}
+%\resizebox{0.98\linewidth}{!}{
+\begin{tabular}{lp{10.8cm}}
+\toprule
+Symbol & Description \\
+\midrule
+$G=(V,E)$ & Complete directed graph representing the distribution network \\
+
+$v_0$ & Depot node \\
+
+$N_1$ & Set of deterministic customers \\
+
+$N_2$ & Set of stochastic customers \\
+
+$N_2^s$ & Realization of stochastic customers under scenario $s\in\mathcal{S}$ \\
+
+$N^s$ & Set of all customers under scenario $s$, i.e., $N^s=N_1\cup N_2^s$ \\
+
+$\mathcal{S}$ & Set of scenarios \\
+
+$K$ & Number of identical vehicles \\
+
+$C$ & Capacity of each vehicle \\
+
+$d_i$ & Demand of customer $i$ \\
+
+$p_i$ & Profit collected if customer $i$ is served \\
+
+$[s_i,e_i]$ & Service time window of customer $i$ \\
+
+$t_i$ & Arrival time or release time of customer $i$ \\
+
+$\mathrm{type}_i$ & Customer type indicator; $\mathrm{type}_i=0$ for deterministic customers and $\mathrm{type}_i=1$ for stochastic customers \\
+
+$c_{ij}$ & Travel distance from node $i$ to node $j$ \\
+
+$\tau_{ij}$ & Travel time from node $i$ to node $j$ \\
+
+$\mathrm{serv}_i$ & Service duration at customer $i$ \\
+
+$x_{ij}^{ks}\in\{0,1\}$ & Equals 1 if vehicle $k$ traverses arc $(i,j)$ in scenario $s$ \\
+
+$y_i^s\in\{0,1\}$ & Equals 1 if customer $i$ is served in scenario $s$ \\
+
+$a_i^s$ & Service start time at customer $i$ in scenario $s$ \\
+
+$b_k$ & Time at which vehicle $k$ becomes idle and available for its next dispatch \\
+
+$D(s)$ & Total travel distance in scenario $s$ \\
+
+$P(s)$ & Total collected profit in scenario $s$ \\
+
+$F(s)$ & Scalar objective value in scenario $s$ \\
+
+$F_E$ & Expected objective value over all scenarios \\
+
+$\alpha$ & Weighting coefficient in the normalized weighted-sum objective \\
+
+$M$ & A sufficiently large positive constant \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Decision variables.}
+For each scenario $s\in\mathcal{S}$, binary routing variable $x_{ij}^{ks}$ equals 1 if vehicle $k$ travels directly from node $i$ to node $j$, and 0 otherwise.
+Binary variable $y_i^s$ indicates whether customer $i$ is served in scenario $s$.
+Continuous variable $a_i^s$ denotes the start time of service at customer $i$.
+
+\paragraph{Objective function}
+The problem involves two competing goals: reducing the total routing effort and increasing the profit collected from served customers.
+To obtain a tractable single-objective model, these criteria are combined through a normalized weighted-sum scheme.
+For each scenario $s\in\mathcal{S}$, let
+\begin{align}
+\label{eq:distance_journal}
+D(s) &= \sum_{k=1}^{K}\sum_{(i,j)\in E^s} c_{ij}\,x_{ij}^{ks},\\
+\label{eq:profit_journal}
+P(s) &= \sum_{i\in N^s} p_i^s\,y_i^s,
+\end{align}
+where $p_i^s$ denotes the realized profit of customer $i$ under scenario $s$.
+The scalar objective value associated with scenario $s$ is defined as
+\begin{equation}
+\label{eq:scenario_weighted_journal}
+F(s)=
+\alpha \frac{D(s)-D^{\min}}{D^{\max}-D^{\min}}
++
+(1-\alpha)\frac{(P^{\max}-P(s))-P^{\min}}{P^{\max}-P^{\min}},
+\end{equation}
+where $\alpha\in[0,1]$ is a weighting coefficient, and
+$D^{\min},D^{\max},P^{\min},P^{\max}$ are normalization constants.
+The overall objective is to minimize the expected value over all scenarios:
+\begin{equation}
+\label{eq:expected_objective_journal}
+F_E=\frac{1}{|\mathcal{S}|}\sum_{s\in\mathcal{S}} F(s),
+\end{equation}
+and the stochastic routing problem is therefore formulated as
+\begin{equation}
+\label{eq:main_model_journal}
+\min \; F_E.
+\end{equation}
+
+\paragraph{Routing and service constraints}
+For each scenario $s\in\mathcal{S}$, every served customer must be visited exactly once:
+\begin{equation}
+\label{eq:visit_once_journal}
+\sum_{k=1}^{K}\sum_{j\in V^s\setminus\{i\}} x_{ij}^{ks}=y_i^s,
+\qquad \forall i\in N^s.
+\end{equation}
+Route continuity is enforced through standard flow conservation constraints:
+\begin{equation}
+\label{eq:flow_journal}
+\sum_{j\in V^s\setminus\{i\}} x_{ij}^{ks}
+=
+\sum_{j\in V^s\setminus\{i\}} x_{ji}^{ks},
+\qquad \forall i\in N^s,\; \forall k=1,\dots,K.
+\end{equation}
+Each vehicle may leave the depot at most once and must return correspondingly:
+\begin{align}
+\label{eq:depot_leave_journal}
+\sum_{j\in N^s} x_{v_0j}^{ks} &\le 1,
+\qquad \forall k=1,\dots,K,\\
+\label{eq:depot_back_journal}
+\sum_{i\in N^s} x_{iv_0}^{ks} &\le 1,
+\qquad \forall k=1,\dots,K.
+\end{align}
+
+\paragraph{Capacity constraints}
+The total realized demand assigned to each vehicle in any scenario must not exceed vehicle capacity:
+\begin{equation}
+\label{eq:capacity_journal}
+\sum_{i\in N^s} d_i^s
+\left(
+\sum_{j\in V^s\setminus\{i\}} x_{ij}^{ks}
+\right)
+\le C,
+\qquad \forall k=1,\dots,K,\; \forall s\in\mathcal{S},
+\end{equation}
+where $d_i^s$ denotes the realized demand of customer $i$ in scenario $s$.
+
+\paragraph{Time-window feasibility}
+Whenever customer $i$ is served, the corresponding service start time must fall within the prescribed time window:
+\begin{equation}
+\label{eq:time_window_journal}
+s_i y_i^s \le a_i^s \le e_i + M(1-y_i^s),
+\qquad \forall i\in N^s,\; \forall s\in\mathcal{S}.
+\end{equation}
+Temporal consistency between successive visits is ensured by
+\begin{equation}
+\label{eq:time_link_journal}
+a_j^s \ge a_i^s + \mathrm{serv}_i + \tau_{ij} - M(1-x_{ij}^{ks}),
+\qquad \forall (i,j)\in E^s,\; \forall k=1,\dots,K,\; \forall s\in\mathcal{S}.
+\end{equation}
+
+\paragraph{Subtour elimination}
+To prevent disconnected cycles, subtour elimination constraints are imposed in the usual form:
+\begin{equation}
+\label{eq:subtour_journal}
+\sum_{i\in U}\sum_{\substack{j\in U\\j\neq i}} x_{ij}^{ks}
+\le |U|-1,
+\qquad \forall U\subseteq N^s,\; U\neq\emptyset,\; \forall k=1,\dots,K,\; \forall s\in\mathcal{S}.
+\end{equation}
+
+\paragraph{Variable domains}
+The decision variables satisfy
+\begin{align}
+\label{eq:domain_x_journal}
+x_{ij}^{ks} &\in \{0,1\},
+&& \forall (i,j)\in E^s,\; \forall k=1,\dots,K,\; \forall s\in\mathcal{S},\\
+\label{eq:domain_y_journal}
+y_i^s &\in \{0,1\},
+&& \forall i\in N^s,\; \forall s\in\mathcal{S},\\
+\label{eq:domain_a_journal}
+a_i^s &\ge 0,
+&& \forall i\in N^s,\; \forall s\in\mathcal{S}.
+\end{align}
+
+The objective in \eqref{eq:main_model_journal} minimizes the expected normalized routing cost over the scenario set.
+Constraint \eqref{eq:visit_once_journal} links service decisions to route construction by ensuring that each accepted customer is visited exactly once.
+Constraints \eqref{eq:flow_journal}--\eqref{eq:depot_back_journal} preserve route continuity and depot consistency.
+Constraint \eqref{eq:capacity_journal} enforces vehicle capacity limitations under realized customer demands.
+Constraints \eqref{eq:time_window_journal} and \eqref{eq:time_link_journal} guarantee feasibility with respect to customer time windows and travel-time propagation.
+Constraint \eqref{eq:subtour_journal} eliminates disconnected subtours, while \eqref{eq:domain_x_journal}--\eqref{eq:domain_a_journal} define the admissible domains of the decision variables.
+
+
+\section{Methodology} \label{sec:propose}
+This section presents the proposed \gls{gp}-based framework for the problem
+formulated in Section~\ref{sec:related}. Instead of constructing routes directly,
+\gls{gp} evolves a pair of symbolic priority functions that are queried
+online whenever a routing decision must be made. The output of the
+evolutionary loop is therefore a reusable dispatching policy that
+remains effective across unseen realizations of the stochastic customer
+set $N_2^s$.
+
+\subsection{Framework overview} \label{subsec:framework}
+
+\paragraph{From dynamic stochastic to dynamic deterministic via
+scenario sampling}
+The problem formulated in Section~\ref{sec:related} is simultaneously
+dynamic, since requests are revealed progressively along the
+operational horizon according to the release times $t_i$, and
+stochastic, since the realized customer set $N_2^s$ as well as the
+demands $d_i^s$ and profits $p_i^s$ of stochastic customers $i\in N_2$
+are random variables. As a consequence, the expected objective $F_E$
+in Equation \ref{eq:expected_objective_journal} is defined as an
+expectation over a continuous, high-dimensional probability space and
+cannot be evaluated exactly.
+
+To make the problem tractable while preserving its dynamic nature, we
+apply the standard Sample Average Approximation (SAA)
+principle: the underlying probability distribution of $N_2$ together
+with its associated random parameters is replaced by a finite set of
+$|\mathcal{S}|$ scenarios drawn i.i.d.\ from that distribution. Each
+scenario $s\in\mathcal{S}$ fixes, once and for all, the realized
+customer subset $N_2^s$, the realized demands $\{d_i^s\}$, the
+realized profits $\{p_i^s\}$ and the release-time schedule
+$\{t_i\}_{i\in N^s}$. Conditional on $s$, every source of randomness
+disappears, so that the original dynamic stochastic problem
+\eqref{eq:main_model_journal} collapses, on this scenario, into a
+dynamic deterministic routing problem in which information is
+still revealed online (events arrive in the order of $t_i$), but every
+revealed quantity is known with certainty.
+
+The expectation in
+Eq.~\eqref{eq:expected_objective_journal} is then approximated by the
+empirical mean
+\begin{equation}
+\label{eq:saa_objective}
+F_E \;\approx\;
+\widehat{F}_E
+\;=\;
+\frac{1}{|\mathcal{S}|}\sum_{s\in\mathcal{S}} F(s),
+\end{equation}
+which converges to $F_E$ as $|\mathcal{S}|\to\infty$ by the law of
+large numbers. Sampling $\mathcal{S}$ once before training and reusing
+it across all candidate policies further guarantees that the resulting
+fitness signal is deterministic conditional on the policy,
+i.e.\ two evaluations of the same individual return exactly the same
+value. This eliminates sampling noise from the optimization loop and
+makes the SAA-induced fitness a well-defined deterministic surrogate
+of $F_E$.
+
+\paragraph{Two coupled online subproblems}
+On every scenario, the resulting dynamic deterministic problem
+decomposes into two coupled subproblems that arise repeatedly along
+the operational horizon:
+\begin{itemize}
+    \item \textbf{Vehicle assignment} (routing decision): when a
+          request $i$ becomes known (either at $t_i$ for $i\in N_1$
+          or upon realization of $N_2^s$ for stochastic
+          customers), decide which of the $K$ vehicles will serve it.
+    \item \textbf{Service sequencing}: when a vehicle becomes idle,
+          decide which queued customer to serve next, given remaining
+          capacity and time-window constraints.
+\end{itemize}
+
+\paragraph{Overall framework}
+Building on the SAA reformulation above, we adopt a scenario-based \gls{gp} approach to evolve a single, reusable dispatching policy. The overall framework proceeds in two distinct phases:
+\begin{description}
+
+\item[Training phase.] An evolutionary algorithm optimizes a population of dispatching policies. To reduce computational overhead, candidate policies are evaluated on a representative subset of training scenarios $\mathcal{S}_{\text{train}} \subset \mathcal{S}$. Furthermore, the simulation is truncated to only consider the first 10$\%$ of the total operational time horizon. Reusing the exact same $\mathcal{S}_{\text{train}}$ and truncated horizon guarantees a deterministic fitness signal during evolution.
+\item[Testing phase.] The optimized policy $\pi^\star$ is frozen and deployed on an independent set of full-horizon testing scenarios $\mathcal{S}_{\text{test}}$ to assess its out-of-sample generalization.
+\end{description}
+
+An overview of the proposed framework is illustrated in Figure~\ref{fig:framework}.
+
+\begin{figure*}[ht]
+    \centering
+    \includegraphics[width=\linewidth]{Figure/framework.pdf}
+    \caption{Overview of the proposed scenario-based \gls{gp} framework. During the training phase, candidate dispatching policies are evolved and evaluated on a subset of training scenarios $\mathcal{S}_{\text{train}}$ over a truncated horizon; in the testing phase, the best evolved policy $\pi^\star$ is frozen and deployed on independent full-horizon scenarios $\mathcal{S}_{\text{test}}$.}
+    \label{fig:framework}
+\end{figure*}
+
+\subsection{Individual representation} \label{subsec:representation}
+
+Each individual encodes a solution to both online subproblems through
+a pair of expression trees $\pi=(\mathcal{T}_R,\mathcal{T}_S)$,
+where $\mathcal{T}_R$ is the routing priority function applied at
+every arrival event and $\mathcal{T}_S$ is the sequencing priority
+function applied at every service-completion event. At each decision
+point, the candidate (vehicle or queued customer) yielding the
+smallest priority value is selected, so that feasibility is enforced
+by construction (see Section~\ref{subsec:simulator-method}).
+
+The two trees share the same function set but draw leaves from
+different terminal sets, since the information available at the
+two decision points is not identical. Figure~\ref{fig:individual}
+illustrates the representation of a single individual as a pair of
+expression trees.
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=\linewidth]{Figure/Invi.pdf}
+    \caption{Representation of an individual as a pair of expression trees: the routing tree $\mathcal{T}_R$, queried at every arrival event to assign a request to a vehicle, and the sequencing tree $\mathcal{T}_S$, queried whenever a vehicle becomes idle to select the next customer to serve. Internal nodes are arithmetic operators while leaves are feature terminals or constants.}
+    \label{fig:individual}
+\end{figure}
+
+\paragraph{Function set}
+Both trees use the six binary operators
+$\{+,-,\times,\,\oslash,\min,\max\}$. Protected division returns $1$
+whenever $|y|<10^{-4}$, which avoids singularities without distorting
+the optimization landscape.
+
+\paragraph{Routing terminals}
+When request $i$ has to be assigned, each candidate vehicle
+$k\in\{1,\dots,K\}$ is scored by $\mathcal{T}_R$ using the normalized
+features in Table~\ref{tab:routing_terminals}. All values lie in $[0,1]$
+so that evolved trees remain invariant to absolute instance size.
+
+\begin{table}[h!]
+\centering
+\caption{Terminal set of the routing tree $\mathcal{T}_R$.}
+\label{tab:routing_terminals}
+\begin{tabular}{lp{10cm}}
+\toprule
+Symbol & Description \\
+\midrule
+C   & Request cost from the vehicle's current position to incoming customer $i$. \\
+W   & Realized demand $d_i^s$ of the incoming request. \\
+NIQ & Number of requests currently queued in vehicle $k$. \\
+WIQ & Total request demand within vehicle $k$'s queue. \\
+CM  & Request cost from the median position of vehicle $k$'s queue to incoming customer $i$. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Sequencing terminals}
+When vehicle $k$ becomes idle, every queued customer $j$ is scored by
+$\mathcal{T}_S$ through the features in
+Table~\ref{tab:sequencing_terminals}. The profit terminal is sign-flipped
+so that minimum selection naturally favors high-revenue customers,
+consistent with the profit term in
+Eq.~\eqref{eq:scenario_weighted_journal}.
+
+\begin{table}[h!]
+\centering
+\caption{Terminal set of the sequencing tree $\mathcal{T}_S$.}
+\label{tab:sequencing_terminals}
+\begin{tabular}{lp{10cm}}
+\toprule
+Symbol & Description \\
+\midrule
+C  & Request cost from the vehicle's current position to candidate $j$. \\
+W  & Realized demand $d_j^s$ of candidate request $j$. \\
+WT & Request waiting time in the queue. \\
+U  & Request urgency factor (e.g., related to time window closing $e_j$). \\
+PT & Request processing time or elapsed waiting time. \\
+T  & Request arrival time (release time $t_j$). \\
+P  & Negated relative profit $-p_j^s/\max_{j'\in Q_k}p_{j'}^s$. \\
+\bottomrule
+\end{tabular}
+\end{table}
+\subsection{Population initialization} \label{subsec:init}
+
+The initial population is generated by the ramped half-and-half
+procedure. Let $L$ be the maximum allowed tree depth. The population is
+divided into groups associated with target depths $\ell=1,\dots,L-1$;
+for each $\ell$, half of the trees are produced by the \textsc{Full}
+method (every leaf placed at exactly depth $\ell$) and the other half by
+the \textsc{Grow} method (each non-root node sampled uniformly from the
+union of operators and terminals, allowing variable shapes). The two
+trees of an individual are sampled independently. This procedure ensures
+structural diversity from generation zero, which is critical because GP
+search is sensitive to the topology of its starting population.
+
+\subsection{Online dispatching simulator}
+\label{subsec:simulator-method}
+
+The simulator is the bridge between a candidate policy and the objective
+value it would produce on a scenario. Given $\pi$ and $s$, it plays out
+the stochastic process induced by the release times $t_i$, applying
+$\mathcal{T}_R$ at every arrival event and $\mathcal{T}_S$ at every
+service-completion event, and returns $\bigl(D(s),P(s)\bigr)$.
+
+\begin{description}
+    \item[Arrival event.] Whenever customer $i$ becomes known, the
+          simulator computes the set $\mathcal{F}$ of vehicles that can
+          still feasibly reach $i$ before $e_i$ given their current
+          queues and capacity. If $\mathcal{F}=\emptyset$, $i$ is
+          rejected ($y_i^s=0$). Otherwise the routing tree assigns $i$
+          to $k^\star=\arg\min_{k\in\mathcal{F}}
+          \mathcal{T}_R(\mathrm{state}_k,i)$.
+    \item[Service-completion event.] When vehicle $k$ becomes idle, the
+          simulator first prunes from $Q_k$ any customer whose time
+          window has already closed, then dispatches $k$ to
+          $j^\star=\arg\min_{j\in Q_k}
+          \mathcal{T}_S(\mathrm{state}_k,j)$. The quantities $D(s)$,
+          $P(s)$ and $a_j^s$ are updated, and a depot return is
+          inserted whenever the running queue demand would otherwise
+          violate \eqref{eq:capacity_journal}.
+\end{description}
+
+The full procedure is summarized in Algorithm~\ref{alg:sim}. By
+construction, every solution produced by the simulator satisfies
+\eqref{eq:visit_once_journal}--\eqref{eq:domain_a_journal}, so
+feasibility is enforced by construction rather than by penalty
+terms in the fitness.
+
+\begin{algorithm}
+\caption{Event-driven dispatching simulator}
+\label{alg:sim}
+\begin{algorithmic}[1]
+\State \textbf{Input:} Policy $\pi=(\mathcal{T}_R,\mathcal{T}_S)$; scenario $s$.
+\State \textbf{Output:} $D(s)$, $P(s)$.
+\State Initialize $Q_k\leftarrow\emptyset$, $b_k\leftarrow 0$ for
+       $k=1,\dots,K$.
+\State Build a min-heap $\mathcal{E}$ of release events
+       $\{(t_i,i):i\in N^s\}$ and idle events $\{(0,k)\}$.
+\While{$\mathcal{E}\neq\emptyset$}
+    \State Pop earliest event $e$ from $\mathcal{E}$.
+    \If{$e$ is the release of customer $i$}
+        \State $\mathcal{F}\leftarrow\{k:\,k$ can serve $i$ before $e_i$
+               within capacity $C\}$.
+        \If{$\mathcal{F}=\emptyset$} mark $i$ rejected.
+        \Else
+            \State $k^\star\leftarrow\arg\min_{k\in\mathcal{F}}
+                   \mathcal{T}_R(\mathrm{state}_k,i)$;
+                   $Q_{k^\star}\leftarrow Q_{k^\star}\cup\{i\}$.
+        \EndIf
+    \ElsIf{$e$ is an idle event of vehicle $k$ \textbf{and}
+           $Q_k\neq\emptyset$}
+        \State Drop from $Q_k$ all customers with $e_j<b_k$.
+        \State $j^\star\leftarrow\arg\min_{j\in Q_k}
+               \mathcal{T}_S(\mathrm{state}_k,j)$.
+        \State Update $D(s)$, $P(s)$, $a_{j^\star}^s$, $b_k$ and push
+               the next idle event of $k$ into $\mathcal{E}$.
+    \EndIf
+\EndWhile
+\State \Return $\bigl(D(s),P(s)\bigr)$.
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Fitness evaluation} \label{subsec:fitness-method}
+Because the expected objective $F_E$ in Eq.~\eqref{eq:expected_objective_journal} cannot be evaluated in closed form, GP estimates it by simulating the event-driven dispatching process (Algorithm~\ref{alg:sim}). To formalize the evaluation scheme across different phases of the framework, let $H$ denote the total operational time horizon of the routing instances.
+
+For any candidate policy $\pi = (\mathcal{T}_R, \mathcal{T}_S)$, a given set of scenarios $\mathcal{S}'$ and a specified simulation horizon $h \le H$, the simulator returns the realized travel distance $D(s, h)$ and collected profit $P(s, h)$ accumulated up to time $h$ for each scenario $s \in \mathcal{S}'$. We define the generalized fitness function as:
+$$
+\mathrm{fit}(\pi, \mathcal{S}', h) = \frac{1}{|\mathcal{S}'|} \sum_{s \in \mathcal{S}'} \left[ \alpha\,\frac{D(s, h)-D^{\min}}{D^{\max}-D^{\min}} + (1-\alpha)\,\frac{(P^{\max}-P(s, h))-P^{\min}}{P^{\max}-P^{\min}} \right]
+$$
+
+The normalization constants $D^{\min}, D^{\max}, P^{\min}, P^{\max}$ are computed on
+the current routing instance being evaluated, so that the fitness value is comparable
+across scenarios within the same instance. This formulation allows us to dynamically adjust the evaluation rigor depending on the algorithmic phase:
+
+\paragraph{Training Fitness} During the evolutionary loop, full-horizon simulations over all scenarios are computationally prohibitive. Therefore, candidate policies are evaluated on a fixed subset of training scenarios $\mathcal{S}_{\text{train}} \subset \mathcal{S}$ and simulated only over a truncated horizon $h = \theta H$ corresponding to the first fraction $\theta$ of the operational time horizon, with $\theta = 0.1$ in our experiments. The fitness driving the GP selection pressure is exactly:
+$$
+\mathrm{fit}_{\text{train}}(\pi) = \mathrm{fit}(\pi, \mathcal{S}_{\text{train}}, \theta H)
+$$
+By strictly reusing $\mathcal{S}_{\text{train}}$ and $\theta H$ across all generations, fitness comparisons remain free of sampling noise.
+
+\paragraph{Testing Fitness} In the testing phase, the generalization of the best-evolved policy $\pi^\star$ is evaluated over independent, unseen scenarios $\mathcal{S}_{\text{test}}$ running through the complete operational horizon. The final testing performance is given by:
+$$
+\mathrm{fit}_{\text{test}}(\pi^\star) = \mathrm{fit}(\pi^\star, \mathcal{S}_{\text{test}}, H)
+$$
+
+To further reduce training time, GP maintains an evaluation cache keyed by the canonical string representation of $(\mathcal{T}_R, \mathcal{T}_S)$. This prevents redundant simulations for syntactically identical offspring generated by crossover or mutation.
+
+
+\subsection{Genetic operators} \label{subsec:operators}
+
+\gls{gp} uses standard subtree variation operators, applied independently
+to the routing and the sequencing components of an individual.
+
+\paragraph{Subtree crossover}
+Two parents are selected by tournament. For each component, a crossover
+point at depth $\ell_1$ is sampled from the first parent, and a
+compatible point $\ell_2$ is sampled from the second parent subject to
+\begin{equation}
+\ell_2\in\bigl[\max(0,\ell_1+d_2-L),\;\min(d_2,\,L-d_1+\ell_1)\bigr],
+\end{equation}
+which guarantees that neither offspring exceeds the maximum depth $L$.
+The corresponding subtrees are then exchanged.
+
+\paragraph{Subtree mutation}
+A node is sampled uniformly at random and its entire subtree is replaced
+by a freshly generated random subtree drawn by the \textsc{Grow} method
+with maximum depth $L-\ell$, where $\ell$ is the depth of the selected
+node. Mutation is the main source of new genetic material once the
+population begins to homogenize.
+
+\paragraph{Selection}
+Parents are drawn by tournament selection of size $\tau$. The algorithm employs a $(\mu+\lambda)$ evolutionary strategy: after generating $\lambda=\mu$ offspring and evaluating them, the $\mu$ parents and $\lambda$ offspring are merged. The combined pool of $\mu+\lambda$ individuals is sorted by $\mathrm{fit}(\cdot)$, and the top $\mu$ individuals are retained for the next generation. This strict replacement mechanism guarantees absolute elitism.
+
+\subsection{Training procedure} \label{subsec:training-method}
+
+The complete training loop is given in Algorithm~\ref{alg:gphh-s}. Each
+generation expands the current population from $\mu$ to
+$\mu+\lambda$ through stochastic application of crossover (with
+probability $p_c$), mutation (with probability $p_m$) and reproduction
+otherwise. Newly generated individuals are evaluated by the simulator on
+the training scenario set $\mathcal{S}_{\text{train}}$ with the truncated
+horizon $\theta H$ (see Section~\ref{subsec:fitness-method}), and the top $\mu$
+are kept by elitist selection. The algorithm terminates after $g$ generations,
+returning the best-so-far individual $\pi^\star$.
+
+\begin{algorithm}[h!]
+\caption{Training procedure of \gls{gp}}
+\label{alg:gphh-s}
+\begin{algorithmic}[1]
+\Require Population size $\mu$; offspring size $\lambda$; max depth $L$; number of generations $g$;
+         crossover rate $p_c$; mutation rate $p_m$; training scenarios
+         $\mathcal{S}_{\text{train}}$.
+\Ensure Best individual $\pi^\star$.
+\State Initialize $\mathcal{P}^{(0)}$ via ramped half-and-half.
+\State Evaluate $\mathrm{fit_{\text{train}}}(\pi)$ for every $\pi\in\mathcal{P}^{(0)}$
+       on $\mathcal{S}_{\text{train}}$.
+\State $t\leftarrow 1$.
+\While{$t \le g$}
+    \State $\mathcal{O}^{(t)}\leftarrow\emptyset$.
+    \For{$r=1,\dots,\mu/2$}
+        \State Pick $\pi_a,\pi_b$ independently by tournament selection of size $\tau$.
+        \State Sample $u\sim\mathcal{U}(0,1)$.
+        \If{$u\le p_c$}
+            \State $(o_1,o_2)\leftarrow$
+                   Subtree-Crossover$(\pi_a,\pi_b)$.
+        \ElsIf{$u\le p_c+p_m$}
+            \State $o_1\leftarrow\textsc{Mutate}(\pi_a)$;\quad
+                   $o_2\leftarrow\textsc{Mutate}(\pi_b)$.
+        \Else
+            \State $o_1\leftarrow\pi_a$;\quad $o_2\leftarrow\pi_b$.
+            \Comment{reproduction}
+        \EndIf
+        \State $\mathcal{O}^{(t)}\leftarrow
+               \mathcal{O}^{(t)}\cup\{o_1,o_2\}$.
+    \EndFor
+    \State Evaluate every $o\in\mathcal{O}^{(t)}$ on $\mathcal{S}_{\text{train}}$.
+    \State $\mathcal{P}^{(t)}\leftarrow$ elitist selection: keep the
+           top-$\mu$ individuals of
+           $\mathcal{P}^{(t-1)}\cup\mathcal{O}^{(t)}$
+    \State $t\leftarrow t+1$.
+\EndWhile
+\State \Return $\pi^\star\leftarrow
+       \arg\min_{\pi\in\mathcal{P}^{(t)}}\mathrm{fit_{\text{train}}}(\pi)$.
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Online deployment} \label{subsec:deploy}
+
+After training, $\pi^\star$ is a fixed pair of compiled expression
+trees. Online deployment in a real dispatching system reduces to
+executing Algorithm~\ref{alg:sim} once on the realized request stream,
+with $\pi^\star$ playing the role of the dispatching policy. Because
+each priority evaluation is a constant-size arithmetic computation, the
+amortized decision latency is independent of the number of remaining
+customers. This is the property that distinguishes \gls{gp} from
+metaheuristic baselines such as DACO, which require a re-optimization
+step after every new arrival.
+
+% tính lại độ phức tạp
+\subsection{Computational complexity} \label{subsec:complexity-method}
+
+We now derive the training cost of \gls{gp} by composing the cost of a
+single simulator call, a single fitness evaluation and the
+generational evolutionary loop.
+
+\paragraph{Cost of one simulator call}
+Let $n=|N^s|$ be the number of customers in scenario $s$ and let $T$
+denote an upper bound on the number of nodes of a priority tree;
+because the maximum depth is $L$, we have $T\le 2^{L+1}-1$, which is a
+constant independent of instance size. The event-driven simulator
+processes at most $2n$ events (one arrival and one service-completion
+per customer). At an arrival event, $\mathcal{T}_R$ is evaluated for
+up to $K$ candidate vehicles, costing $O(KT)$; at a
+service-completion event, $\mathcal{T}_S$ is evaluated for up to
+$|Q_k|\le n$ queued customers, costing $O(nT)$. Heap operations on
+the event queue contribute $O(\log n)$ per event. Summing over all
+events, one simulator call costs
+\begin{equation}
+\label{eq:cost-sim}
+O\!\Bigl(n\,(n+K)\,T \;+\; n\log n\Bigr)
+\;=\;
+O\!\bigl(n^2 T\bigr),
+\end{equation}
+where the last simplification uses $K\le n$ and absorbs the logarithmic
+term.
+
+\paragraph{Cost of one fitness evaluation}
+Evaluating an individual $\pi$ requires one simulator call per
+scenario in the training set $\mathcal{S}_{\text{train}}$, so
+\begin{equation}
+\label{eq:cost-fit}
+C_{\mathrm{fit}}
+\;=\;
+O\!\bigl(|\mathcal{S}_{\text{train}}|\cdot n^2 T\bigr).
+\end{equation}
+
+\paragraph{Cost of one generation}
+A generation produces $\lambda$ offspring through
+tournament-based crossover or mutation. Sampling a tournament and
+performing a subtree variation cost $O(\tau)$ and $O(T)$,
+respectively, hence offspring production costs
+$O\!\bigl(\lambda(\tau+T)\bigr)$, which is dominated by the
+subsequent fitness evaluations
+$O\!\bigl(\lambda\,C_{\mathrm{fit}}\bigr)$. Merging parents
+and offspring and keeping the top-$\mu$ individuals adds
+$O\!\bigl((\mu+\lambda)\log(\mu+\lambda)\bigr)$. The
+per-generation cost is therefore
+\begin{equation}
+\label{eq:cost-gen}
+O\!\bigl(\lambda\cdot|\mathcal{S}_{\text{train}}|\cdot n^2 T\bigr).
+\end{equation}
+
+\paragraph{Total training cost}
+Running the loop for $g$ generations and accounting for the initial
+evaluation of the $\mu$ founders yields
+\begin{equation}
+\label{eq:cost-total}
+O\!\Bigl(\bigl(\mu + g\,\lambda\bigr)\cdot|\mathcal{S}_{\text{train}}|\cdot
+n^2 T\Bigr)
+\;=\;
+O\!\bigl(g\,\mu\cdot|\mathcal{S}_{\text{train}}|\cdot n^2 T\bigr),
+\end{equation}
+where the last identity uses $\lambda=\mu$ (as in the $(\mu+\lambda)$ strategy) and treats
+the tree-size bound $T$ as a constant set by the maximum depth $L$.
+Training therefore scales linearly with the number of generations
+$g$, the population size $\mu$ and the number of training scenarios
+$|\mathcal{S}_{\text{train}}|$, and quadratically with the instance size $n$, while
+the fleet size $K$ enters only through the linear term absorbed in
+$n^2$.
+
+\paragraph{Online deployment cost}
+At deployment time, no evolutionary loop is required: a single
+simulator pass with the trained policy $\pi^\star$ on the realized
+request stream costs $O(|\mathcal{S}_{\text{test}}| \cdot n^2 T)$ in the worst case, with constant
+per-event decision latency.
+
+\section{Experiments} \label{sec:exp}
+\subsection{Experiment settings}
+\subsubsection{Parameters}
+All algorithms are implemented using the Python programming language. GP and
+DACO are evaluated over 10 independent runs with different random seeds,
+whereas the rule-based heuristics are deterministic. The masked-PPO baseline
+described below is currently represented by one global checkpoint per problem
+size, trained with seed 42. Its results are therefore reported as a descriptive
+single-seed comparison and are not included in the multi-run statistical tests.
+The GP parameters are summarized in Table~\ref{tab:paras}.
+\begin{table}[h!]
+\caption{Parameters} \label{tab:paras}
+\centering
+\begin{tabular}{p{0.15\columnwidth}|p{0.45\columnwidth}|p{0.12\columnwidth}}
+\hline
+\textbf{Parameter} & \textbf{Description} & \textbf{Value} \\
+\hline
+$g$              & Number of generations          & 100 \\
+$\mu$            & Population size                & 100 \\
+$\lambda$        & Number of offspring per generation & 100 \\
+$p_c$            & Crossover rate                 & 0.8 \\
+$p_m$            & Mutation rate                  & 0.15 \\
+$L$              & Maximum tree depth             & 8 \\
+$\tau$           & Tournament size                & 8 \\
+%$|\mathcal{S}_{\text{train}}|$ & Number of training scenarios   & 1  \\
+%$|\mathcal{S}|$  & Number of full (testing) scenarios per instance & 16 \\
+\hline
+\end{tabular}
+\end{table}
+\subsubsection{Datasets}
+To evaluate the effectiveness and scalability of the proposed method, we employ two widely used benchmark datasets for the Vehicle Routing Problem with Time Windows, namely the Solomon benchmark and its large-scale extension proposed by \cite{hung2025adaptive}.
+
+The Solomon dataset consists of 56 instances, each involving 100 customers and one depot. Customers are characterized by their spatial coordinates, demand, service time and time windows. The instances are categorized into six group C1, C2, R1, R2, RC1 and RC2. The C-type instances represent clustered customer distributions, R-type instances correspond to randomly distributed customers and RC-type instances combine both clustered and random characteristics. Furthermore, type-1 instances typically have tighter time windows and shorter scheduling horizons, while type-2 instances feature wider time windows, allowing more flexible route construction. To assess the performance of the proposed method on larger problem scales, we also use the extended \gls{vrptw} benchmark. This dataset increases the number of customers to 200 and 400, providing more challenging and realistic large-scale routing scenarios.
+
+In the dynamic setting, customer requests do not appear simultaneously but arrive over time. The arrival time of each request is generated according to a uniform distribution:
+\[
+t_i \sim \mathcal{U}\left[0,\; \max\{0,\; s_i - \alpha\}\right],
+\]
+where $s_i$ denotes the start of customer $i$'s time window and $\alpha$ is a fixed lead-time offset. This formulation ensures that requests are revealed within a feasible service interval while preserving stochasticity and increasing the difficulty of real-time routing and scheduling.
+\subsubsection{Compared algorithms}
+
+To evaluate the effectiveness of the proposed method, we compare it with a set of representative baseline approaches, including classical rule-based heuristics and a metaheuristic designed for dynamic routing problems.
+
+\paragraph{Rule-based heuristics}
+We consider several simple yet widely used heuristic combinations that construct solutions based on predefined sequencing and routing rules. These heuristics are lightweight and fast, making them suitable baselines for dynamic environments. Specifically, we evaluate the following combinations:
+
+\begin{itemize}
+    \item \textbf{C + C}: Customers are selected based on the closest-distance criterion (C) and inserted into routes using a nearest insertion strategy (C).
+    \item \textbf{C + W}: Customer selection is based on proximity (C), while insertion prioritizes customers with earlier time window deadlines (W).
+    \item \textbf{WIQ + C}: Customers are selected according to the Workload In Queue (WIQ) rule, which prioritizes requests contributing to queue balancing, and inserted using a distance-based strategy (C).
+    \item \textbf{C + P}: Customer selection is based on proximity (C), while insertion follows a profit-based rule (P) that prioritizes customers with higher collectable profit.
+    \item \textbf{WIQ + P}: Customers are selected using the WIQ rule and inserted based on profit (P), combining workload balancing with profit maximization.
+\end{itemize}
+
+These heuristic combinations represent different trade-offs between spatial efficiency, temporal urgency and system workload, providing a diverse set of baselines for comparison.
+
+In addition to rule-based heuristics, we include the Dynamic Ant Colony Optimization (DACO) algorithm as a strong metaheuristic baseline \cite{hung2025adaptive}. DACO extends the classical ant colony optimization framework to dynamic routing scenarios by continuously updating pheromone trails in response to newly arriving customer requests. This allows the algorithm to adapt routing decisions over time while maintaining a balance between exploration and exploitation. DACO has been shown to achieve competitive performance in dynamic vehicle routing problems and serves as an effective benchmark for evaluating advanced adaptive methods.
+
+\paragraph{Masked-PPO reinforcement-learning baseline}
+We additionally compare GP with a masked Proximal Policy Optimization (PPO)
+baseline that learns the same two online decisions considered by GP: assigning
+a newly revealed request to a time-feasible vehicle and selecting the next
+request from a vehicle queue. A shared candidate-scoring network represents
+each action through 19 normalized spatial, temporal, load, demand and profit
+features. Infeasible actions are removed by action masking, and every rollout
+uses the same event-driven simulator and the same normalized distance--profit
+fitness function as GP. Following a global-policy training protocol, one PPO
+checkpoint is trained for each problem size from 10,000 generated samples with
+a budget of 10,000 objective evaluations. The checkpoint is then evaluated
+deterministically on all 16 scenarios of every available instance, resulting in
+896 report rollouts for the 100-customer dataset and 960 report rollouts for
+each of the 200- and 400-customer datasets. This budget is comparable to GP on
+a per-trained-model basis; it should not be interpreted as equal aggregate
+training compute because GP learns a separate policy for each instance, whereas
+PPO learns one reusable policy per problem size. The synthetic PPO training
+set is generated by empirical bootstrap using the corresponding benchmark
+folder as its reference distribution. The reported PPO results should
+therefore be interpreted as in-distribution evaluation rather than a strict
+held-out generalization test.
+
+
+\subsection{Results and discussions}
+
+\subsubsection{Overall comparison with baseline algorithms}
+Table~\ref{tab:overall} presents the overall comparison between GP and the
+baseline algorithms on the small, medium and large datasets. GP remains the
+best method among the five rule-based heuristics and DACO at every problem
+size. The additional reinforcement-learning comparison, however, reveals a
+scale-dependent pattern. On the 100-customer dataset, GP obtains a fitness of
+$0.179$, compared with $0.228$ for masked PPO. Thus, PPO is approximately
+$27.4\%$ worse in fitness at this scale; it also collects $7.4\%$ less profit
+while travelling $16.2\%$ farther. This result suggests that the symbolic GP
+policy is more data-efficient on the smaller instances.
+
+The ranking changes on the larger datasets. On the 200-customer instances,
+masked PPO reduces the average fitness from $0.266$ for GP to $0.121$, a
+$54.5\%$ relative reduction, and increases average collected profit from
+$790.524$ to $1013.148$. On the 400-customer instances, PPO obtains a fitness
+of $0.124$ compared with $0.387$ for GP, corresponding to a $68.0\%$
+reduction, while increasing average profit from $1036.540$ to $1971.438$.
+The learned PPO policies serve, on average, $76.59\%$, $93.80\%$ and
+$92.81\%$ of requests on the small, medium and large datasets, respectively.
+
+These gains are accompanied by substantially longer routes. Compared with GP,
+PPO travels approximately $3.1$ times farther on the medium dataset and $4.6$
+times farther on the large dataset. Nevertheless, the lower normalized fitness
+shows that the additional profit more than compensates for the distance term
+under the equal-weight objective. Consequently, the new baseline does not
+support a claim that GP is uniformly best among all learning methods. Rather,
+GP provides the strongest result on the small dataset and retains the advantage
+of compact symbolic interpretability, whereas the neural policy shows stronger
+large-scale solution quality. Since the PPO figures come from one training
+seed, this comparison should be treated as preliminary until multiple
+independent PPO checkpoints are available.
+
+\begin{table}[ht]
+\centering
+\caption{Overall comparison of algorithms on different datasets}
+\label{tab:overall}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{ccccc}
+\toprule
+\textbf{Dataset} & \textbf{Algorithm} & \textbf{Fitness} & \textbf{Profit} & \textbf{Distance} \\
+\midrule
+\multirow{8}{*}{small}
+& C+C   & 0.421 & 91.537  & 454.788   \\
+& C+W   & 0.407 & 123.349 & 811.914  \\
+& WIQ+C & 0.466 & 38.091  & \textbf{189.542}   \\
+& C+P   & 0.359 & 168.490 & 886.163   \\
+& WIQ+P & 0.426 & 85.250  & 432.115   \\
+& DACO  & 0.200 $\pm$ 0.037 & 346.882 $\pm$ 34.798 & 1469.396 $\pm$ 107.616  \\
+& GP    & \textbf{0.179 $\pm$ 0.025} & \textbf{358.087 $\pm$ 20.545} & 1560.924 $\pm$ 174.735 \\
+& RL (masked PPO)$^{\dagger}$ & 0.228 & 331.512 & 1813.714 \\
+\midrule
+\multirow{8}{*}{medium}
+& C+C   & 0.395 & 386.638 & 2572.075 \\
+& C+W   & 0.403 & 417.399 & 3134.919 \\
+& WIQ+C & 0.469 & 151.041 & \textbf{1231.312} \\
+& C+P   & 0.357 & 516.663 & 3170.934  \\
+& WIQ+P & 0.442 & 250.866 & 1709.364 \\
+& DACO  & 0.363 $\pm$ 0.022 & 583.278 $\pm$ 58.750 & 3322.188 $\pm$ 213.695 \\
+& GP    & 0.266 $\pm$ 0.030 & 790.524 $\pm$ 107.380 & 4170.094 $\pm$ 558.313 \\
+& RL (masked PPO)$^{\dagger}$ & \textbf{0.121} & \textbf{1013.148} & 13067.261 \\
+\midrule
+\multirow{8}{*}{large}
+& C+C  & 0.481 & 503.278 & 4206.826  \\
+& C+W   & 0.502 & 561.007 & 5337.215  \\
+& WIQ+C & 0.506 & 206.507 & \textbf{2031.187} \\
+& C+P   & 0.462 & 734.391 & 5415.990  \\
+& WIQ+P & 0.501 & 338.608 & 2801.738  \\
+& DACO  & 0.500 $\pm$ 0.016 & 654.792 $\pm$ 85.602 & 4713.697 $\pm$ 301.365  \\
+& GP    & 0.387 $\pm$ 0.026 & 1036.540 $\pm$ 129.581 & 6525.778 $\pm$ 662.685 \\
+& RL (masked PPO)$^{\dagger}$ & \textbf{0.124} & \textbf{1971.438} & 30263.144 \\
+\bottomrule
+\end{tabular}}
+
+\vspace{1mm}
+\parbox{0.96\columnwidth}{\footnotesize $^{\dagger}$Masked-PPO values are
+scenario averages from one checkpoint trained with seed 42; unlike the GP and
+DACO entries, they are not means over 10 independent training runs.}
+\end{table}
+
+
+
+
+\subsubsection{Statistical significance analysis}
+The inferential analysis in this subsection is restricted to GP, DACO and the
+five rule-based heuristics used in the original 10-run protocol. Masked PPO is
+not included in Tables~\ref{tab:friedman} and
+\ref{tab:wilcoxon_holm_by_dataset} because only one trained checkpoint is
+currently available for each problem size. Accordingly, the statistical
+claims below establish the superiority of GP over the original baselines, but
+do not constitute a significance claim for the GP--PPO comparison.
+
+Table~\ref{tab:friedman} presents the Friedman test results based on the fitness values of all compared algorithms. Since lower fitness values indicate better solutions, a lower mean rank corresponds to better performance. The proposed GP-based method consistently achieves the best mean rank across all datasets. In particular, GP obtains mean ranks of 1.29, 1.03 and 1.02 on the 100-, 200- and 400-customer datasets, respectively. Over all 176 instances, GP achieves the best overall mean rank of 1.11. Furthermore, the Friedman test returns extremely small $p$-values for all datasets, indicating that the observed performance differences among algorithms are statistically significant.
+
+Table~\ref{tab:wilcoxon_holm_by_dataset} presents the results of the Wilcoxon signed-rank test with Holm correction for pairwise comparisons between the proposed GP-based method and the baseline algorithms on the small, medium and large datasets. Overall, the proposed method consistently achieves dominant performance across all datasets. The number of positive ranks is significantly larger than the number of negative ranks in almost all comparisons, indicating that GP obtains better fitness values than the corresponding baseline methods on the majority of benchmark instances.
+
+On the small dataset, GP already demonstrates clear superiority over all heuristic approaches, outperforming them on all 56 instances. Although DACO remains relatively competitive on small-scale instances, GP still achieves better performance on 40 out of 56 instances, with considerably larger positive rank sums than negative rank sums. As the problem size increases, the advantage of GP becomes even more pronounced. On the medium dataset, GP outperforms DACO on 58 out of 60 instances and completely dominates all heuristic methods. Similarly, on the large dataset, GP achieves better fitness values than DACO on all 60 instances and only loses once against the C+C heuristic. These results indicate that the proposed method maintains strong robustness and scalability under large-scale and highly dynamic environments.
+
+Furthermore, all Holm-adjusted $p$-values are substantially smaller than the significance level $\alpha = 0.05$, confirming that the observed improvements are statistically significant rather than resulting from random variations. In addition, the positive rank sums are consistently much larger than the negative rank sums, suggesting that GP not only wins more frequently but also achieves larger performance improvements over the compared algorithms.
+
+Overall, the Wilcoxon signed-rank test results strongly support the effectiveness and robustness of the proposed GP-based method across different problem scales and benchmark settings.
+
+\begin{table}[ht]
+\centering
+\caption{Friedman test results on fitness values. Lower mean rank indicates better performance}
+\label{tab:friedman}
+\scriptsize
+%\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccccccccc}
+\hline
+\multirow{2}{*}{\textbf{Dataset}} &
+\multicolumn{7}{c}{\textbf{Mean rank}} &
+\multirow{2}{*}{$\chi^2$} &
+\multirow{2}{*}{$df$} &
+\multirow{2}{*}{$p$} \\
+\cmidrule(lr){2-8}
+& \textbf{GP} & \textbf{DACO} & \textbf{C+C} & \textbf{C+P} & \textbf{C+W} & \textbf{WIQ+C} & \textbf{WIQ+P} & & & \\
+\hline
+small &
+\textbf{1.29} & 1.71 & 5.07 & 3.04 & 5.09 & 6.48 & 5.32 &
+285.16 & 6 & $1.23 \times 10^{-58}$ \\
+
+medium &
+\textbf{1.03} & 3.00 & 4.17 & 2.63 & 5.12 & 6.40 & 5.65 &
+275.48 & 6 & $1.46 \times 10^{-56}$ \\
+
+large &
+\textbf{1.02} & 5.05 & 3.62 & 3.07 & 5.35 & 5.15 & 4.75 &
+189.36 & 6 & $3.47 \times 10^{-38}$ \\
+
+\hline
+Overall &
+\textbf{1.11} & 3.29 & 4.27 & 2.91 & 5.19 & 6.00 & 5.24 &
+643.94 & 6 & $7.72 \times 10^{-136}$ \\
+\hline
+\end{tabular}%}
+\end{table}
+
+
+\begin{table*}[ht]
+\centering
+\caption{Wilcoxon signed-rank test with Holm correction for pairwise comparisons between GP and baseline algorithms on each dataset}
+\label{tab:wilcoxon_holm_by_dataset}
+\scriptsize
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{llrrrrrrr}
+\hline
+\textbf{Dataset} & \textbf{Baseline} &
+\textbf{Negative} &
+\textbf{Positive} &
+\textbf{Mean rank (-)} &
+\textbf{Mean rank (+)} &
+\textbf{Sum rank (-)} &
+\textbf{Sum rank (+)} &
+\textbf{$p_{\text{Holm}}$} \\
+\hline
+
+\multirow{6}{*}{small}
+& DACO  & 16 & 40 & 13.94 & 34.33 & 223.00 & 1373.00 & $2.73 \times 10^{-6}$ \\
+& C+C   & 0  & 56 & 0.00  & 28.50 & 0.00   & 1596.00 & $4.53 \times 10^{-10}$ \\
+& C+P   & 0  & 56 & 0.00  & 28.50 & 0.00   & 1596.00 & $4.53 \times 10^{-10}$ \\
+& C+W   & 0  & 56 & 0.00  & 28.50 & 0.00   & 1596.00 & $4.53 \times 10^{-10}$ \\
+& WIQ+C & 0  & 56 & 0.00  & 28.50 & 0.00   & 1596.00 & $4.53 \times 10^{-10}$ \\
+& WIQ+P & 0  & 56 & 0.00  & 28.50 & 0.00   & 1596.00 & $4.53 \times 10^{-10}$ \\
+\hline
+
+\multirow{6}{*}{medium}
+& DACO  & 2  & 58 & 1.50  & 31.50 & 3.00   & 1827.00 & $9.78 \times 10^{-11}$ \\
+& C+C   & 0  & 60 & 0.00  & 30.50 & 0.00   & 1830.00 & $9.78 \times 10^{-11}$ \\
+& C+P   & 0  & 60 & 0.00  & 30.50 & 0.00   & 1830.00 & $9.78 \times 10^{-11}$ \\
+& C+W   & 0  & 60 & 0.00  & 30.50 & 0.00   & 1830.00 & $9.78 \times 10^{-11}$ \\
+& WIQ+C & 0  & 60 & 0.00  & 30.50 & 0.00   & 1830.00 & $9.78 \times 10^{-11}$ \\
+& WIQ+P & 0  & 60 & 0.00  & 30.50 & 0.00   & 1830.00 & $9.78 \times 10^{-11}$ \\
+\hline
+
+\multirow{6}{*}{large}
+& DACO  & 0  & 60 & 0.00  & 30.50 & 0.00   & 1830.00 & $9.78 \times 10^{-11}$ \\
+& C+C   & 1  & 59 & 1.00  & 31.00 & 1.00   & 1829.00 & $9.78 \times 10^{-11}$ \\
+& C+P   & 0  & 60 & 0.00  & 30.50 & 0.00   & 1830.00 & $9.78 \times 10^{-11}$ \\
+& C+W   & 0  & 60 & 0.00  & 30.50 & 0.00   & 1830.00 & $9.78 \times 10^{-11}$ \\
+& WIQ+C & 0  & 60 & 0.00  & 30.50 & 0.00   & 1830.00 & $9.78 \times 10^{-11}$ \\
+& WIQ+P & 0  & 60 & 0.00  & 30.50 & 0.00   & 1830.00 & $9.78 \times 10^{-11}$ \\
+\hline
+\end{tabular}}
+
+\vspace{1mm}
+\footnotesize{
+\tiny{
+Positive rank indicates that GP achieves a smaller fitness value than the corresponding baseline algorithm, while negative rank indicates that GP obtains a larger fitness value.}
+}
+\end{table*}
+
+
+
+\subsubsection{Performance under different topologies and scheduling horizons}
+Figures \ref{fig:bar_dis} and \ref{fig:bar_horizon} illustrate the performance comparison of the algorithms under different customer distributions and scheduling horizons, respectively.
+
+From Figure \ref{fig:bar_dis}, it can be observed that the proposed method consistently achieves the best fitness values across all customer distributions, including random (R), clustered (C) and mixed (RC) instances. In particular, the improvement is more significant on the random and mixed distributions, where customer locations are more irregular and dynamic routing decisions become more challenging. This result indicates that the proposed GP-based method can effectively adapt to heterogeneous spatial structures and maintain stable solution quality under different routing environments.
+
+Among all distributions, the clustered instances (C) are relatively easier for all algorithms, resulting in lower fitness values overall. This is expected because geographically concentrated customers allow more efficient route construction. Nevertheless, the proposed method still maintains a clear advantage over DACO and the heuristic baseline (C+P), demonstrating its superior routing capability even in less challenging scenarios.
+
+Figure \ref{fig:bar_horizon} presents the comparison under different scheduling horizons. The results show that all algorithms achieve better performance on Type~2 instances than on Type~1 instances. This behavior is reasonable because Type~2 instances have wider time windows and longer scheduling horizons, providing greater flexibility for route optimization. In contrast, Type~1 instances impose tighter temporal constraints, making dynamic routing and scheduling considerably more difficult.
+
+Despite these challenges, the proposed method consistently outperforms DACO and the heuristic baseline on both instance types. The performance gap is particularly noticeable on Type~1 instances, indicating that the proposed GP-based method is more effective in handling highly constrained dynamic routing scenarios. Overall, the results confirm that the proposed approach is robust under different customer distributions and scheduling horizons while maintaining strong adaptability and solution quality across diverse benchmark settings.
+\begin{figure*}[ht]
+    \centering
+    \begin{subfigure}[b]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{Figure/bar_dis.pdf}
+        \caption{Customer distributions}
+        \label{fig:bar_dis}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{Figure/bar_horizon.pdf}
+        \caption{Scheduling horizons}
+        \label{fig:bar_horizon}
+    \end{subfigure}
+
+    \caption{Average fitness values of the compared algorithms under different experimental settings. (a) Performance under different customer distributions (R: random, C: clustered, RC: mixed). (b) Performance under different scheduling horizons (Type~1: short horizon, Type~2: long horizon).}
+    
+    \label{fig:distribution_horizon}
+\end{figure*}
+
+\subsubsection{Impact of stochasticity levels}
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\linewidth]{Figure/Stochasticity.pdf}
+    \caption{Average fitness values of the compared algorithms under different stochasticity levels.} \label{fig:dynamic}
+\end{figure}
+
+Figure~\ref{fig:dynamic} presents the performance of all algorithms under different stochasticity levels, ranging from 10\% to 70\%. As the stochasticity level increases, the objective values of all algorithms gradually increase, indicating that the routing problem becomes more challenging when customer requests are revealed with greater uncertainty.
+
+Despite the increased difficulty, the proposed method consistently achieves the lowest objective values across all stochasticity levels. This result demonstrates its strong ability to adapt to uncertain and dynamically changing environments. In particular, the performance degradation of the proposed method remains relatively moderate as the stochasticity level increases from 10\% to 70\%, suggesting that the learned routing policies generalize well under different levels of uncertainty.
+
+Compared with DACO, the proposed method maintains a clear performance advantage throughout the entire range of stochasticity levels. Although DACO is able to adapt to newly arriving requests through pheromone updates, its objective values remain consistently higher than those obtained by the proposed approach. The performance gap becomes more evident under highly stochastic settings, indicating that the proposed method is more effective in handling uncertain customer arrivals.
+
+The heuristic approaches exhibit the weakest performance overall. Among them, WIQ+C and WIQ+P consistently produce the largest objective values, while C+P achieves the best performance among the heuristic baselines. Nevertheless, even the strongest heuristic remains substantially inferior to our proposed method. This observation highlights the limitations of static decision rules when dealing with uncertain and dynamically evolving routing environments.
+
+\subsubsection{Analysis of objective components}
+The violin plot in Figure \ref{fig:violin_obj} presents the distribution of objective values obtained by all compared algorithms. It can be observed that the proposed method consistently achieves lower objective values, as indicated by its lower median and the overall shift of the distribution toward smaller values. Although the distribution of the proposed method appears more dispersed compared to some baseline approaches, this behavior reflects the higher variability of solutions explored in dynamic environments. Such variability indicates that the proposed method is capable of exploring a wider solution space, which increases the likelihood of identifying high-quality solutions across different instances. In contrast, heuristic methods tend to produce more concentrated distributions, but with significantly higher objective values, suggesting limited adaptability. DACO shows moderate dispersion, but still fails to reach the same level of solution quality as the proposed method.
+
+The scatter plot in Figure \ref{fig:2obj} illustrates the relationship between total collected profit and travel distance. It can be observed that the proposed method tends to achieve higher profit at the expense of longer travel distance, indicating a clear trade-off between the two objectives. Specifically, solutions produced by the proposed method are generally located in the region of higher profit, while exhibiting larger travel distances compared to baseline methods. This behavior suggests that the method prioritizes revenue generation by serving more or higher-value customers, even if additional routing cost is incurred. In contrast, heuristic approaches tend to produce solutions with shorter travel distances but significantly lower profit, reflecting their limited capability to exploit high-reward opportunities in dynamic environments. DACO achieves a more balanced performance; however, it still falls short in capturing the high-profit region explored by the proposed method.
+
+
+\begin{figure}
+    \centering
+    \includegraphics[width = \linewidth]{Figure/violin_obj.png}
+    \caption{Distribution of objective values across algorithms.}
+    \label{fig:violin_obj}
+\end{figure}
+
+\begin{figure}
+    \centering
+    \includegraphics[width = \linewidth]{Figure/scratter.png}
+    \caption{Trade-off analysis of profit and travel distance across algorithms.}
+    \label{fig:2obj}
+\end{figure}
+
+\subsubsection{Sensitivity to the routing and sequencing tree depths}
+\label{subsubsec:depth-sensitivity}
+As described in Section~\ref{subsec:representation}, each individual is a
+pair of expression trees $\pi=(\mathcal{T}_R,\mathcal{T}_S)$, and the
+maximum allowed depth of each tree directly controls the expressiveness of the
+learned policies. A depth that is too small restricts the trees to overly
+simple rules that cannot capture the interaction between spatial, temporal and
+profit-related features, whereas a depth that is too large enlarges the search
+space, encourages bloat and increases the risk of overfitting the training
+scenarios. Because the two trees act at different decision points and draw on
+different terminal sets (Tables~\ref{tab:routing_terminals}
+and~\ref{tab:sequencing_terminals}), there is no a~priori reason for their
+optimal depths to coincide. We therefore decouple the single bound $L$ into a
+routing depth $L_R$ and a sequencing depth $L_S$, and perform a full grid search
+over $L_R,L_S\in\{4,6,8,10,12\}$, i.e.\ $25$ depth configurations in total.
+
+To keep the cost of the $25$-configuration grid search manageable, this study is
+conducted on a small representative subset of instances extracted from the
+$200$-customer benchmark. For every configuration we train GP and report
+the mean normalised test fitness (lower is better), where per-instance
+fitness values are normalised before averaging so that instances of different
+scales contribute comparably. The resulting $5\times5$ landscape is shown in
+Figure~\ref{fig:heatmap_depth}.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.85\linewidth]{Figure/heatmap_depth.png}
+    \caption{Mean normalised test fitness (lower is better) as a function of the
+    routing tree depth $L_R$ (rows) and the sequencing tree depth $L_S$
+    (columns). The best configuration, $(L_R,L_S)=(8,6)$, is highlighted by the
+    red box.}
+    \label{fig:heatmap_depth}
+\end{figure}
+
+Several consistent patterns emerge from Figure~\ref{fig:heatmap_depth}. First,
+the landscape is clearly unimodal in $L_R$: the entire row $L_R=8$ dominates the
+grid, containing the three lowest values overall ($0.080$, $0.118$ and
+$0.126$), while both shallower rows ($L_R=4,6$) and deeper rows ($L_R=10,12$)
+yield uniformly worse fitness. This confirms the expected trade-off: a routing
+depth of $8$ is rich enough to combine the five routing terminals into
+effective vehicle-selection rules, whereas $L_R\le 6$ underfits and
+$L_R\ge 10$ begins to overfit and bloat without any compensating gain. Second,
+along the sequencing axis the best results are obtained for moderate depths,
+with $L_S=6$ giving the minimum within the dominant row; very deep sequencing
+trees ($L_S=12$) are consistently the worst across almost all rows
+(e.g.\ $0.473$, $0.421$, $0.469$), indicating that the sequencing decision is
+governed by a relatively compact priority rule that does not benefit from extra
+complexity.
+
+The global optimum is reached at $(L_R,L_S)=(8,6)$ with a mean normalised test
+fitness of $0.080$, which is markedly lower than every neighbouring
+configuration: the closest competitors $(8,4)$ and $(8,8)$ attain only
+$0.118$ and $0.126$, i.e.\ roughly $47\%$ and $58\%$ higher fitness,
+respectively. The fact that the minimum sits in a smooth ``valley'' surrounded
+by larger values, rather than being an isolated outlier, indicates that this
+choice is robust to small perturbations of either depth and is not an artefact
+of random variation. The mild asymmetry $L_R>L_S$ is also intuitive: routing
+must reconcile a larger number of competing vehicles and queue-state features
+at every arrival event and therefore benefits from slightly deeper expressions,
+whereas sequencing operates on a single vehicle's queue and is well served by a
+more compact rule.
+
+Taken together, these results justify adopting $(L_R,L_S)=(8,6)$, equivalently
+an overall depth bound $L=\max(L_R,L_S)=8$, as the default depth configuration
+in all subsequent experiments: it minimises the expected normalised test fitness,
+lies in a stable region of the depth landscape and strikes the best balance
+between policy expressiveness and the risk of bloat and overfitting.
+
+\subsubsection{Sensitivity to the number of scenarios}
+\label{subsubsec:scenario-sensitivity}
+Since the fitness of each candidate heuristic is estimated through Monte Carlo simulation over a set of stochastic scenarios $\mathcal{S}$, the cardinality $|\mathcal{S}|$ directly governs the trade-off between the accuracy of the expected-fitness estimator and the computational cost of training. A small $|\mathcal{S}|$ yields a noisy estimator that may bias the selection pressure of GP and produce unstable rankings of candidate heuristics, whereas an excessively large $|\mathcal{S}|$ inflates the simulation budget without delivering statistically meaningful improvement. To locate an appropriate operating point, we sweep $|\mathcal{S}|$ from $1$ to $32$ on the data subset and report the resulting average fitness in Figure~\ref{fig:fitness_vs_S}.
+
+\begin{figure}
+    \centering
+    \includegraphics[scale = 0.5]{Figure/fitness_vs_S.png}
+    \caption{Average fitness as a function of the number of scenarios $|\mathcal{S}|$. The dashed vertical line marks the operating point $|\mathcal{S}|=16$ adopted in the remaining experiments.}
+    \label{fig:fitness_vs_S}
+\end{figure}
+
+The fitness curves in Figure~\ref{fig:fitness_vs_S} exhibit a clear monotonic-then-saturating behaviour: a steep improvement when $|\mathcal{S}|$ is small, followed by a flat regime once enough scenarios are used to average out the simulation noise. The rising segment is most pronounced for $|\mathcal{S}|\le 5$, where each additional scenario visibly lifts the average fitness, and the curves are already practically converged around $|\mathcal{S}|=9$--$10$ in the sense that further increases of $|\mathcal{S}|$ produce changes in average fitness that are smaller than the line thickness in the figure. At first sight, fixing $|\mathcal{S}|$ in that range would therefore appear to be a defensible default.
+
+We nevertheless adopt the slightly more conservative value $|\mathcal{S}|=16$ for two complementary reasons. First, even though the mean of the fitness estimator has stabilised by $|\mathcal{S}|\approx 9$--$10$, its variance has not: with only ten scenarios the standard error of the Monte Carlo estimate is still substantial, and small random fluctuations between repeated runs can change the relative ranking of competing candidate heuristics. Since GP selection relies on consistent pairwise comparisons between individuals, a noisier fitness estimate translates directly into noisier selection pressure and slower convergence of the search. Increasing $|\mathcal{S}|$ from $10$ to $16$ shrinks the standard error of the estimator by a further factor of $\sqrt{16/10}\approx 1.26$, which is a modest but worthwhile additional safety margin in this respect. Second, this safety margin comes at a strictly linear cost in simulation time and, as visible in Figure~\ref{fig:fitness_vs_S}, going further than $|\mathcal{S}|=16$ no longer produces any perceptible change in the average fitness on any of the three training-budget curves. Choosing $|\mathcal{S}|>16$ would therefore inflate the simulation cost in direct proportion to $|\mathcal{S}|$ without buying any additional quality.
+
+Taken together, $|\mathcal{S}|=16$ is the smallest scenario budget for which the expected-fitness curve has clearly entered its plateau on all three configurations, while still keeping the simulation cost moderate. We adopt this value as the default number of scenarios in all subsequent experiments, as it provides the best compromise between the stability of the stochastic fitness estimate and the overall training cost.
+
+\section{Conclusion and future work} \label{sec:con}
+
+This paper investigated the stochastic dynamic vehicle routing problem with time windows, in which deterministic and stochastic customer requests coexist and routing decisions must be made online as customer information becomes available over time. To effectively address this problem, we proposed a genetic programming-based policy learning framework. The proposed approach evolves two decision rules, one for assigning customers to vehicles and the other for determining the order in which customers are served. An event-driven simulation framework is employed to evaluate candidate policies while ensuring capacity and time-window feasibility throughout the routing process. Furthermore, the proposed training procedure provides a stable fitness evaluation process, allowing routing policies to be learned effectively under uncertainty.
+
+Extensive experiments were conducted on the Solomon benchmark and the Gehring and Homberger extensions with 200 and 400 customers, covering various customer distributions, scheduling horizons, and stochasticity levels. The results demonstrated that the proposed method consistently achieved superior performance compared with five rule-based heuristics and the dynamic ant colony optimization algorithm. In particular, the proposed approach obtained the best average ranks across all datasets in the Friedman test, while pairwise Wilcoxon signed-rank tests with Holm correction confirmed the statistical significance of the observed improvements over these original baselines. The supplementary masked-PPO experiment provided a more nuanced comparison: GP achieved the better fitness on the 100-customer benchmark, while PPO achieved lower fitness and higher collected profit on the 200- and 400-customer benchmarks, albeit with substantially longer routes. Because the PPO results currently represent only one training seed, this comparison remains descriptive and requires repeated training runs before statistical conclusions can be drawn. The evolved GP policies remain attractive when interpretability and low-latency symbolic decisions are important, whereas the PPO results indicate strong potential for reusable global policies at larger problem scales.
+
+Although the proposed framework has shown promising results, several research directions deserve further investigation. First, the current study focuses on a single-objective formulation that aggregates profit and travel cost into a unified objective function. Extending the framework to a multi-objective setting could explicitly characterize the trade-off between profitability and operational efficiency and provide a diverse set of Pareto-optimal routing policies. Second, although the evolved policies are interpretable, they may become complex as problem size increases. Future research could focus on simplifying these policies while maintaining their effectiveness. Third, the current stochastic model only considers uncertainty in customer arrivals, demands, and profits. Future work may investigate additional sources of uncertainty, such as stochastic travel times, service durations, vehicle failures, and energy consumption in electric vehicle fleets. Finally, hybrid approaches that combine genetic programming with local search, surrogate-assisted optimization, or reinforcement learning may further enhance both solution quality and adaptability, providing a promising direction for next-generation intelligent routing systems.
+\section*{Acknowledgements}
+	This research is funded by the Vietnam National Foundation for Science and Technology Development (NAFOSTED) under grant number 102.01-2025.106.
+		%\bibliographystyle{}
+		\bibliography{references}
+		\newpage	
+		\begin{appendices}
+		\section*{Declarations}
+
+\textbf{Conflict of Interest}
+
+The authors declare that they have no known competing financial interests or personal relationships that could have appeared to influence the work reported in this paper.
+
+%\textbf{Funding}
+
+% This research was supported by the Vietnam National Foundation for Science and Technology Development (NAFOSTED) under Grant No. 102.01-2025.106.
+			
+% 			\textbf{Authors’ contribution statements}
+%         \begin{itemize}
+%     \item Bui Dinh Pham: Conceptualization, Software, Investigation, Writing--original draft.
+%     \item Bui Trong Duc: Software, Investigation, Validation, Writing--original draft.
+%     \item Nguyen Thi Tam: Methodology, Software, Validation, Writing--original draft.
+%     \item Huynh Thi Thanh Binh: Methodology, Supervision, Writing--review \& editing.
+%     \item Le Trong Vinh: Conceptualization, Supervision, Writing--review \& editing.
+% \end{itemize}
+		
+		\end{appendices}
+
+\end{document}

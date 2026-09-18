@@ -82,7 +82,7 @@ def _auto_fleet(csv_path: str):
 # ── GP gọn: tiến hóa ra best_tree ────────────────────────────────────────────
 def _select_parent(rng, pop):
     idxs = rng.sample(range(len(pop)), k=min(8, len(pop)))
-    return max(idxs, key=lambda i: pop[i].result[2])
+    return min(idxs, key=lambda i: pop[i].result[2])
 
 
 def evolve_best_policy(train_set, gens, pop_size, max_depth, seed):

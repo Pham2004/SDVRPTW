@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 3: evaluate a trained global checkpoint on repository CSV data."""
+"""Stage 3: evaluate a trained checkpoint on repository CSV data."""
 from __future__ import annotations
 
 import argparse
@@ -27,7 +27,7 @@ from sim.problem import ProblemSet
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Evaluate one global masked-PPO checkpoint on CSV scenarios"
+        description="Evaluate one masked-PPO checkpoint on CSV scenarios"
     )
     parser.add_argument("checkpoint")
     parser.add_argument("target_path")
@@ -35,6 +35,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("num_scenarios", nargs="?", type=int, default=16)
     parser.add_argument("--max-instances", type=int, default=None)
     parser.add_argument("--max-scenarios", type=int, default=None)
+    parser.add_argument(
+        "--skip-first-scenarios", type=int, default=0,
+        help="exclude this many leading scenarios from reported evaluation",
+    )
+    parser.add_argument(
+        "--instance-name", default=None,
+        help="evaluate only this discovered instance name",
+    )
     parser.add_argument("--output", default="datasets/rl_checkpoint_results.json")
     parser.add_argument("--summary-csv", default=None)
     parser.add_argument("--device", default=None)
@@ -63,6 +71,12 @@ def main(argv=None) -> int:
         if args.max_scenarios is not None
         else args.num_scenarios
     )
+    if args.skip_first_scenarios < 0:
+        raise SystemExit("--skip-first-scenarios must be non-negative")
+    if args.skip_first_scenarios >= max_scenarios:
+        raise SystemExit(
+            "--skip-first-scenarios must be smaller than the scenario limit"
+        )
     checkpoint = torch.load(
         args.checkpoint, map_location="cpu", weights_only=False
     )
@@ -74,11 +88,17 @@ def main(argv=None) -> int:
     instances = discover_instances(
         args.target_path, max_instances, max_scenarios
     )
+    if args.instance_name is not None:
+        if args.instance_name not in instances:
+            raise SystemExit(
+                f"instance {args.instance_name!r} not found in {args.target_path}"
+            )
+        instances = {args.instance_name: instances[args.instance_name]}
     if not instances:
         raise SystemExit(f"No CSV instances found in {args.target_path}")
 
     print("=" * 72)
-    print("Global masked PPO checkpoint evaluation")
+    print("Masked PPO checkpoint evaluation")
     print("=" * 72)
     print(
         f"checkpoint={os.path.abspath(args.checkpoint)} device={agent.device} "
@@ -101,8 +121,15 @@ def main(argv=None) -> int:
             truck_capacity=truck_capacity,
             num_trucks=num_trucks,
         )
+        if len(problem_set) <= args.skip_first_scenarios:
+            raise SystemExit(
+                f"{instance_name} has no scenarios left after skipping "
+                f"{args.skip_first_scenarios}"
+            )
         rows = []
         for scenario_idx, problem in enumerate(problem_set, 1):
+            if scenario_idx <= args.skip_first_scenarios:
+                continue
             simulation = PolicySimulation(
                 problem, agent, weight=weight, deterministic=True
             )
@@ -188,6 +215,7 @@ def main(argv=None) -> int:
         "training_evaluations": checkpoint.get("evaluation_count"),
         "training_simulator_rollouts": checkpoint.get("simulator_rollouts"),
         "report_simulator_rollouts": total_rollouts,
+        "skipped_leading_scenarios": args.skip_first_scenarios,
         "elapsed_s": elapsed,
         "overall": overall,
         "instances": all_results,

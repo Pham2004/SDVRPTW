@@ -7,3 +7,5 @@ datasets/rl_smoke*.json
 datasets/rl_checkpoint_results*.json
 .rl_pipeline_smoke/
 rl_runs/
+gp_runs/
+benchmark_runs/
